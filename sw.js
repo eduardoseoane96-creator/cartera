@@ -1,7 +1,7 @@
 /* Service worker: cachea la app para que abra al instante y funcione sin señal.
    Los datos de la planilla NO se cachean acá (van a localStorage). */
 
-const CACHE = 'cartera-v1';
+const CACHE = 'cartera-v2';
 const SHELL = [
   './',
   './index.html',
