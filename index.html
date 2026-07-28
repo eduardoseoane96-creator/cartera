@@ -254,11 +254,18 @@ function logo(tk){
     'this.dataset.f=(this.dataset.f||0)+1;if(this.dataset.f>1){this.outerHTML=\'<div class=&quot;av&quot;>'+ini+'</div>\'}">';
 }
 
-/* ---------- helpers de vista ---------- */
-const vivo=p=>p.precioVivo?p.valorVivo:p.valorActual;
-const pnlDe=p=>p.precioVivo?p.pnlVivo:p.pnl;
-const rendDe=p=>p.precioVivo?p.rendVivo:p.rend;
-const precioDe=p=>p.precioVivo||p.precioActual;
+/* ---------- helpers de vista ----------
+   Cartera    -> precio de la acción entera (Yahoo)
+   Patrimonio -> precio implícito por CEDEAR (IOL × ratio), igual que la planilla */
+const ced=()=>vista==='patrimonio';
+const vivo=p=>ced()?(p.valorCed!=null?p.valorCed:p.valorActual)
+                   :(p.precioVivo?p.valorVivo:p.valorActual);
+const pnlDe=p=>ced()?(p.pnlCed!=null?p.pnlCed:p.pnl)
+                    :(p.precioVivo?p.pnlVivo:p.pnl);
+const rendDe=p=>ced()?(p.rendCed!=null?p.rendCed:p.rend)
+                     :(p.precioVivo?p.rendVivo:p.rend);
+const precioDe=p=>ced()?(p.precioCed||p.precioActual):(p.precioVivo||p.precioActual);
+const enVivo=p=>ced()?!!p.precioCedRaw:!!p.precioVivo;
 
 function totalPosiciones(){ return (D.posiciones||[]).reduce((a,p)=>a+vivo(p),0); }
 function totalCosto(){ return (D.posiciones||[]).reduce((a,p)=>a+p.costo,0); }
@@ -275,6 +282,14 @@ function totales(){
   const costo=totalCosto();
   return { titulo:'Valor de la cartera', valor:val, pnl:pnl, pct:costo?(pnl/costo)*100:0,
     minis:[['Invertido',fUSD0(costo)],['Disponible',fUSD0(t.cash)]] };
+}
+
+/** Aviso de qué precio se está usando en cada pestaña. */
+function nota(){
+  if(vista==='historico') return '';
+  return ced()
+    ? 'Valuado con el precio del CEDEAR local, igual que tu planilla.'
+    : 'Valuado con el precio de la acción entera en el mercado de origen.';
 }
 
 /* Los grupos se recalculan con los valores en vivo para que el donut
@@ -302,7 +317,7 @@ function grupos(){
 
 /* ---------- render ---------- */
 function render(){
-  const vivos=D.cotizados||0;
+  const vivos=ced()?(D.cotizadosCedear||0):(D.cotizados||0);
   $('upd').innerHTML = vivos
     ? '<span class="dot"></span>'+vivos+' en vivo · planilla '+esc(D.actualizado||'')
     : 'Actualizado '+esc(D.actualizado||'');
@@ -322,13 +337,14 @@ function render(){
   renderDonut();
 
   const ps=(D.posiciones||[]).slice().sort((a,b)=>vivo(b)-vivo(a));
-  $('hPos').innerHTML='Posiciones <span>'+ps.length+' activos</span>';
+  $('hPos').innerHTML='Posiciones <span>'+esc(nota())+'</span>';
   $('pos').innerHTML=ps.map((p,i)=>{
     const pl=pnlDe(p), pr=precioDe(p);
     return '<div class="row" data-i="'+i+'">'+logo(p.ticker)+
       '<div class="mid">'+
         '<div class="tk">'+esc(p.ticker)+
-          (p.precioVivo?'<span class="tag on">vivo</span>':'')+'</div>'+
+          (enVivo(p)?'<span class="tag on">vivo</span>':'')+
+          (ced()&&p.tickerCed?'<span class="tag">'+esc(p.tickerCed)+'</span>':'')+'</div>'+
         '<div class="mt">'+fCant(p.cantidad)+' × '+fUSD(pr,2)+'</div>'+
       '</div>'+
       '<div class="rt"><div class="rv">'+fUSD(vivo(p),2)+'</div>'+
@@ -392,8 +408,8 @@ function renderHist(){
 
   const f=filtroH==='abiertas'?h.filter(x=>x.abierta):filtroH==='cerradas'?h.filter(x=>!x.abierta):h;
   const ord=f.slice().sort((a,b)=>b.pnlNeto-a.pnlNeto);
-  $('histList').innerHTML=ord.length?ord.map(x=>
-    '<div class="row" style="cursor:default">'+logo(x.ticker)+
+  $('histList').innerHTML=ord.length?ord.map((x,i)=>
+    '<div class="row" data-i="'+i+'">'+logo(x.ticker)+
       '<div class="mid"><div class="tk">'+esc(x.ticker)+
         (x.abierta?'<span class="tag on">abierta</span>':'<span class="tag">cerrada</span>')+'</div>'+
         '<div class="mt">'+esc(x.clase)+' · '+fUSD0(x.invertido)+' · '+x.operaciones+' ops</div></div>'+
@@ -402,43 +418,120 @@ function renderHist(){
         (x.rentas?' · renta '+fUSD0(x.rentas):'')+'</div></div>'+
     '</div>').join('')
     :'<div style="color:var(--tx3);font-size:13px;padding:8px 0">Sin posiciones en este filtro.</div>';
+  [...$('histList').children].forEach(el=>{
+    if(el.dataset.i!==undefined) el.onclick=()=>detalleHist(ord[+el.dataset.i]);
+  });
+}
+
+const fila=(k,v,c)=>'<div class="tline" style="padding:8px 0;border-bottom:.5px solid var(--line)">'+
+  '<span style="color:var(--tx2)">'+k+'</span><b class="'+(c||'')+'">'+v+'</b></div>';
+
+function abrirSheet(html){
+  $('sheetBody').innerHTML=html+'<button class="btn alt" onclick="cerrar()">Cerrar</button>';
+  $('ov').classList.add('on'); $('sheet').scrollTop=0;
+}
+
+function cabecera(ticker,sub,extra){
+  return '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">'+logo(ticker)+
+    '<div><div style="font-size:19px;font-weight:600;letter-spacing:-.3px">'+esc(ticker)+
+    (extra||'')+'</div><div style="font-size:12.5px;color:var(--tx3)">'+esc(sub)+'</div></div></div>';
+}
+
+function tablaDividendos(ticker){
+  const dv=(D.dividendos&&D.dividendos[ticker.toUpperCase()])||[];
+  if(!dv.length) return '';
+  const tot=dv.reduce((a,x)=>a+x.monto,0);
+  return '<h2 style="margin-left:0">Rentas y dividendos cobrados <span>'+fUSD(tot)+'</span></h2>'+
+    '<div class="card" style="padding:4px 16px 12px"><table>'+
+    '<thead><tr><th>Fecha</th><th>Bróker</th><th>Monto</th></tr></thead><tbody>'+
+    dv.slice().reverse().map(x=>'<tr><td>'+esc(x.fecha)+'</td>'+
+      '<td style="text-align:right;color:var(--tx3);font-size:11.5px">'+esc(x.broker)+'</td>'+
+      '<td>'+nf(x.monto,2)+'</td></tr>').join('')+
+    '</tbody></table></div>';
 }
 
 function detalle(p){
   const ops=(D.operaciones&&D.operaciones[p.ticker])||[];
-  const f=(k,v,c)=>'<div class="tline" style="padding:8px 0;border-bottom:.5px solid var(--line)">'+
-    '<span style="color:var(--tx2)">'+k+'</span><b class="'+(c||'')+'">'+v+'</b></div>';
   const eq=p.ratio?' · '+fCant(p.cantidad*p.ratio)+' CEDEARs (ratio '+p.ratio+')':'';
-  $('sheetBody').innerHTML=
-    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">'+logo(p.ticker)+
-      '<div><div style="font-size:19px;font-weight:600;letter-spacing:-.3px">'+esc(p.ticker)+'</div>'+
-      '<div style="font-size:12.5px;color:var(--tx3)">'+esc(p.tipo)+'</div></div></div>'+
+  const enCed=ced();
+
+  // Bloque principal: el de la pestaña en la que estás
+  const precioAhora = enCed
+    ? (p.precioCedRaw
+        ? fUSD(p.precioCed)+' <span class="tag on">'+esc(p.tickerCed)+' × '+p.ratio+'</span>'
+        : null)
+    : (p.precioVivo ? fUSD(p.precioVivo)+' <span class="tag on">'+esc(p.fuenteVivo)+'</span>' : null);
+
+  // Bloque comparativo: la otra valuación
+  const otra = enCed
+    ? (p.precioVivo ? { t:'Según la acción entera', pr:p.precioVivo, val:p.valorVivo, pnl:p.pnlVivo, rend:p.rendVivo,
+        nota:'Precio de la acción en su mercado de origen, vía '+esc(p.fuenteVivo||'')+'.' } : null)
+    : (p.precioCedRaw ? { t:'Según el CEDEAR', pr:p.precioCed, val:p.valorCed, pnl:p.pnlCed, rend:p.rendCed,
+        nota:'CEDEAR '+esc(p.tickerCed||'')+' a '+fUSD(p.precioCedRaw)+' × ratio '+p.ratio+'.' } : null);
+
+  abrirSheet(
+    cabecera(p.ticker,p.tipo)+
     '<div class="card" style="padding:14px 16px">'+
-      f('Tenencia',fCant(p.cantidad)+eq)+
-      (p.precioVivo?f('Precio ahora',fUSD(p.precioVivo)+' <span class="tag on">'+esc(p.fuenteVivo)+'</span>'):'')+
-      (p.varDia!==null&&p.varDia!==undefined?f('Variación del día',fPct(p.varDia),cls(p.varDia)):'')+
-      f('Posición',fUSD(vivo(p)))+
-      f('Costo',fUSD(p.costo))+
-      f('P&L no realizado',(pnlDe(p)>0?'+':'')+fUSD(pnlDe(p)),cls(pnlDe(p)))+
-      f('Rendimiento',fPct(rendDe(p)),cls(rendDe(p)))+
-      f('Precio prom. compra',fUSD(p.precioProm))+
+      fila('Tenencia',fCant(p.cantidad)+eq)+
+      (precioAhora?fila('Precio ahora',precioAhora):'')+
+      (!enCed&&p.varDia!==null&&p.varDia!==undefined?fila('Variación del día',fPct(p.varDia),cls(p.varDia)):'')+
+      fila('Posición',fUSD(vivo(p)))+
+      fila('Costo',fUSD(p.costo))+
+      fila('P&L no realizado',(pnlDe(p)>0?'+':'')+fUSD(pnlDe(p)),cls(pnlDe(p)))+
+      fila('Rendimiento',fPct(rendDe(p)),cls(rendDe(p)))+
+      fila('Precio prom. compra',fUSD(p.precioProm))+
     '</div>'+
-    (p.precioVivo?'<h2 style="margin-left:0">Según tu planilla</h2><div class="card" style="padding:14px 16px">'+
-      f('Precio vía CEDEAR',fUSD(p.precioActual))+
-      f('Posición',fUSD(p.valorActual))+
-      f('P&L no realizado',(p.pnl>0?'+':'')+fUSD(p.pnl),cls(p.pnl))+
-      f('Rendimiento',fPct(p.rend),cls(p.rend))+
-      '<div style="font-size:11.5px;color:var(--tx3);padding-top:10px;line-height:1.45">'+
-      'La planilla valúa con el precio del CEDEAR local; arriba se usa el de la acción entera.'+
-      '</div></div>':'')+
+    (otra?'<h2 style="margin-left:0">'+otra.t+'</h2><div class="card" style="padding:14px 16px">'+
+      fila('Precio',fUSD(otra.pr))+
+      fila('Posición',fUSD(otra.val))+
+      fila('P&L no realizado',(otra.pnl>0?'+':'')+fUSD(otra.pnl),cls(otra.pnl))+
+      fila('Rendimiento',fPct(otra.rend),cls(otra.rend))+
+      '<div style="font-size:11.5px;color:var(--tx3);padding-top:10px;line-height:1.45">'+otra.nota+'</div>'+
+      '</div>':'')+
+    tablaDividendos(p.ticker)+
     (ops.length?'<h2 style="margin-left:0">Operaciones <span>'+ops.length+'</span></h2>'+
       '<div class="card" style="padding:4px 16px 12px"><table>'+
       '<thead><tr><th>Fecha</th><th>Cant.</th><th>Compra</th><th>Rend.</th></tr></thead><tbody>'+
       ops.map(o=>'<tr><td>'+esc(o.fecha)+'</td><td>'+fCant(o.cantidad)+'</td>'+
         '<td>'+nf(o.precioCompra,2)+'</td><td class="'+cls(o.rend)+'">'+fPct(o.rend)+'</td></tr>').join('')+
-      '</tbody></table></div>':'')+
-    '<button class="btn alt" onclick="cerrar()">Cerrar</button>';
-  $('ov').classList.add('on'); $('sheet').scrollTop=0;
+      '</tbody></table></div>':'')
+  );
+}
+
+/** Detalle de una fila del histórico (sirve para abiertas y cerradas). */
+function detalleHist(x){
+  const p=(D.posiciones||[]).find(q=>q.ticker.toUpperCase()===x.ticker.toUpperCase());
+  const ops=(D.operaciones&&D.operaciones[x.ticker])||[];
+  const badge=x.abierta?'<span class="tag on" style="margin-left:7px">abierta</span>'
+                       :'<span class="tag" style="margin-left:7px">cerrada</span>';
+  abrirSheet(
+    cabecera(x.ticker,x.clase,badge)+
+    '<div class="card" style="padding:14px 16px">'+
+      fila('P&L neto',(x.pnlNeto>0?'+':'')+fUSD(x.pnlNeto),cls(x.pnlNeto))+
+      fila('Rendimiento neto',fPct(x.rendNeto),cls(x.rendNeto))+
+      fila('P&L bruto',(x.pnlBruto>0?'+':'')+fUSD(x.pnlBruto),cls(x.pnlBruto))+
+      fila('Rendimiento bruto',fPct(x.rendBruto),cls(x.rendBruto))+
+      fila('Capital operado',fUSD(x.invertido))+
+      fila('Rentas y dividendos',fUSD(x.rentas))+
+      fila('Operaciones',String(x.operaciones))+
+    '</div>'+
+    (p?'<h2 style="margin-left:0">Posición actual</h2><div class="card" style="padding:14px 16px">'+
+      fila('Tenencia',fCant(p.cantidad))+
+      fila('Precio ahora',fUSD(precioDe(p)))+
+      fila('Posición',fUSD(vivo(p)))+
+      fila('Costo',fUSD(p.costo))+
+      fila('P&L no realizado',(pnlDe(p)>0?'+':'')+fUSD(pnlDe(p)),cls(pnlDe(p)))+
+      '</div>'
+      :'<div style="font-size:12px;color:var(--tx3);margin:0 4px 14px;line-height:1.5">'+
+       'Posición cerrada: el P&L de arriba ya está realizado.</div>')+
+    tablaDividendos(x.ticker)+
+    (ops.length?'<h2 style="margin-left:0">Operaciones abiertas <span>'+ops.length+'</span></h2>'+
+      '<div class="card" style="padding:4px 16px 12px"><table>'+
+      '<thead><tr><th>Fecha</th><th>Cant.</th><th>Compra</th><th>Rend.</th></tr></thead><tbody>'+
+      ops.map(o=>'<tr><td>'+esc(o.fecha)+'</td><td>'+fCant(o.cantidad)+'</td>'+
+        '<td>'+nf(o.precioCompra,2)+'</td><td class="'+cls(o.rend)+'">'+fPct(o.rend)+'</td></tr>').join('')+
+      '</tbody></table></div>':'')
+  );
 }
 function cerrar(){$('ov').classList.remove('on')}
 $('ov').onclick=e=>{if(e.target===$('ov'))cerrar()};
