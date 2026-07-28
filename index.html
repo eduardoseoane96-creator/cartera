@@ -170,6 +170,11 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
     </div>
 
     <h2 id="hPos">Posiciones</h2>
+    <div class="chips">
+      <button id="oV" aria-pressed="true">Posición</button>
+      <button id="oA" aria-pressed="false">P&amp;L US$</button>
+      <button id="oR" aria-pressed="false">P&amp;L %</button>
+    </div>
     <div class="card" id="pos"></div>
 
     <div id="topsWrap">
@@ -225,9 +230,12 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
 <script>
 const K_URL='cartera.url', K_TOK='cartera.token', K_DATA='cartera.data';
 const $=id=>document.getElementById(id);
-let D=null, vista='cartera', filtroH='todas', chart=null;
+let D=null, vista='cartera', filtroH='todas', ordenPos='valor', chart=null;
 
-const COL=['#2a78d6','#eb6834','#1baf7a','#eda100','#d55181','#7f77dd','#888780','#639922'];
+const COL=['#2a78d6','#eb6834','#1baf7a','#eda100','#d55181','#7f77dd','#888780','#639922',
+           '#00a3a3','#a35ac4','#b5892a'];
+/* Activos que se dibujan sueltos en el donut de Cartera; el resto va junto. */
+const MAX_DONUT=10;
 
 const DOM={MELI:'mercadolibre.com',NFLX:'netflix.com',SPOT:'spotify.com',CRM:'salesforce.com',
 ADBE:'adobe.com',MSFT:'microsoft.com',ORCL:'oracle.com',META:'meta.com',NU:'nubank.com.br',
@@ -285,15 +293,29 @@ function totalCosto(){ return (D.posiciones||[]).reduce((a,p)=>a+p.costo,0); }
 function totales(){
   const t=D.totales;
   if(vista==='patrimonio'){
+    // Arriba, en grande, los activos totales; el patrimonio neto va en la
+    // tarjeta de abajo. "dif" ajusta por la diferencia entre el valor que
+    // tiene la planilla y el que traen los precios en vivo.
     const dif=totalPosiciones()-t.subtotalValor;
-    return { titulo:'Patrimonio neto', valor:(t.patrimonioNeto||0)+dif, pnl:D.resumen.pnlNetoTotal||0, pct:null,
-      minis:[['Activos',fUSD0((t.totalCartera||0)+dif)],['Deudas',fUSD0(t.deudas)]] };
+    return { titulo:'Activos totales', valor:(t.totalCartera||0)+dif, pnl:D.resumen.pnlNetoTotal||0, pct:null,
+      minis:[['Patrimonio neto',fUSD0((t.patrimonioNeto||0)+dif)],['Deudas',fUSD0(t.deudas)]] };
   }
-  const val=totalPosiciones()+(t.cash||0);
+  // Cartera: solo lo invertido a valor de hoy. El efectivo no se suma acá,
+  // queda para Patrimonio; sigue visible en la tarjeta "Disponible".
+  const val=totalPosiciones();
   const pnl=(D.posiciones||[]).reduce((a,p)=>a+pnlDe(p),0);
   const costo=totalCosto();
   return { titulo:'Valor de la cartera', valor:val, pnl:pnl, pct:costo?(pnl/costo)*100:0,
     minis:[['Invertido',fUSD0(costo)],['Disponible',fUSD0(t.cash)]] };
+}
+
+/* Orden de la lista de posiciones. Los tres criterios usan la valuación de la
+   pestaña en la que estés, así que en Patrimonio ordena por CEDEAR. */
+function ordenarPosiciones(ps){
+  const c=ps.slice();
+  if(ordenPos==='pnl')  return c.sort((a,b)=>pnlDe(b)-pnlDe(a));
+  if(ordenPos==='rend') return c.sort((a,b)=>rendDe(b)-rendDe(a));
+  return c.sort((a,b)=>vivo(b)-vivo(a));
 }
 
 /** Aviso de qué precio se está usando en cada pestaña. */
@@ -305,8 +327,20 @@ function nota(){
 }
 
 /* Los grupos se recalculan con los valores en vivo para que el donut
-   coincida siempre con el número grande de arriba. */
+   coincida siempre con el número grande de arriba.
+
+   Cartera    -> una porción por activo, las 10 mayores y el resto junto.
+   Patrimonio -> por tipo de activo, más el efectivo y los autos. */
 function grupos(){
+  if(vista!=='patrimonio'){
+    const ps=(D.posiciones||[]).map(p=>({grupo:p.ticker,valor:vivo(p)}))
+                               .filter(x=>x.valor>0).sort((a,b)=>b.valor-a.valor);
+    if(ps.length<=MAX_DONUT) return ps;
+    const top=ps.slice(0,MAX_DONUT);
+    const resto=ps.slice(MAX_DONUT).reduce((a,x)=>a+x.valor,0);
+    if(resto>0) top.push({grupo:'Resto ('+(ps.length-MAX_DONUT)+')',valor:resto});
+    return top;
+  }
   const mapa={};
   (D.posiciones||[]).forEach(p=>{
     const t=(p.tipo||'').toLowerCase();
@@ -322,8 +356,8 @@ function grupos(){
   });
   const out=Object.keys(mapa).map(k=>({grupo:k,valor:mapa[k]}));
   const t=D.totales||{};
-  if(t.cash) out.push({grupo:'Efectivo',valor:t.cash});
-  if(vista==='patrimonio'&&t.autos) out.push({grupo:'Autos',valor:t.autos});
+  if(t.cash)  out.push({grupo:'Efectivo',valor:t.cash});
+  if(t.autos) out.push({grupo:'Autos',valor:t.autos});
   return out.sort((a,b)=>b.valor-a.valor);
 }
 
@@ -348,7 +382,7 @@ function render(){
 
   renderDonut();
 
-  const ps=(D.posiciones||[]).slice().sort((a,b)=>vivo(b)-vivo(a));
+  const ps=ordenarPosiciones(D.posiciones||[]);
   $('hPos').innerHTML='Posiciones <span>'+esc(nota())+'</span>';
   $('pos').innerHTML=ps.map((p,i)=>{
     const pl=pnlDe(p), pr=precioDe(p);
@@ -619,6 +653,13 @@ function cambiar(v){
   $('tabH').setAttribute('aria-selected',v==='historico');
   if(D) render();
 }
+[['oV','valor'],['oA','pnl'],['oR','rend']].forEach(([id,val])=>{
+  $(id).onclick=()=>{
+    ordenPos=val;
+    ['oV','oA','oR'].forEach((x,i)=>$(x).setAttribute('aria-pressed',['valor','pnl','rend'][i]===val));
+    if(D) render();
+  };
+});
 [['fT','todas'],['fA','abiertas'],['fC','cerradas']].forEach(([id,val])=>{
   $(id).onclick=()=>{
     filtroH=val;
