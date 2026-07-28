@@ -62,10 +62,13 @@ h2 span{font-size:12px;color:var(--tx3);font-weight:400}
   justify-content:center;pointer-events:none;text-align:center}
 .dctr b{font-size:14px;font-weight:600;letter-spacing:-.3px;line-height:1.15}
 .dctr span{font-size:9.5px;color:var(--tx3);margin-top:1px}
-.lg{display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--tx2);min-width:0;flex:1 1 auto}
-.lg div{display:flex;align-items:center;gap:7px;min-width:0}
-.lg em{font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lg b{font-weight:500;color:var(--tx);margin-left:auto;padding-left:6px;white-space:nowrap}
+.lg{display:flex;flex-direction:column;gap:9px;font-size:12px;color:var(--tx2);min-width:0;flex:1 1 auto}
+.lg div{display:flex;align-items:flex-start;gap:7px;min-width:0}
+.lg .sw{margin-top:4px}
+.lg i{font-style:normal;min-width:0}
+.lg em{font-style:normal;display:block;font-size:12.5px;color:var(--tx);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg b{font-weight:400;display:block;font-size:11.5px;color:var(--tx2);white-space:nowrap}
 .sw{width:9px;height:9px;border-radius:3px;flex:0 0 9px}
 
 .row{display:flex;align-items:center;gap:11px;padding:11px 0;border-top:.5px solid var(--line);cursor:pointer}
@@ -107,6 +110,14 @@ table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{text-align:right;color:var(--tx3);font-weight:500;padding:6px 0;font-size:11px;border-bottom:.5px solid var(--line)}
 th:first-child,td:first-child{text-align:left}
 td{padding:7px 0;border-bottom:.5px solid var(--line);text-align:right}
+table.ops{font-size:11.5px;table-layout:fixed}
+table.ops th{font-size:10px}
+table.ops td{padding:7px 0 6px}
+table.ops th:first-child,table.ops td:first-child{width:23%}
+table.ops .na{color:var(--tx3)}
+table.ops tr.viva td:first-child{position:relative;padding-left:8px}
+table.ops tr.viva td:first-child::before{content:'';position:absolute;left:0;top:50%;
+  transform:translateY(-50%);width:3px;height:3px;border-radius:50%;background:var(--up)}
 input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
   background:var(--card);color:var(--tx);font:400 15px/1 inherit;margin-top:6px}
 .btn{width:100%;padding:14px;border-radius:12px;border:0;background:var(--tx);color:var(--bg);
@@ -243,6 +254,7 @@ const fUSD=(n,d=2)=>(n<0?'−':'')+'US$ '+nf(n,d);
 const fUSD0=n=>(n<0?'−':'')+'US$ '+Math.abs(n||0).toLocaleString('es-AR',{maximumFractionDigits:0});
 const fPct=n=>(n>0?'+':n<0?'−':'')+nf(n,2)+'%';
 const fCant=n=>Math.abs(n)>=1000?nf(n,0):Math.abs(n)>=1?nf(n,2):nf(n,4);
+const fFecha=s=>String(s||'').replace(/\/\d{2}(\d{2})$/,'/$1');
 const cls=n=>n>0?'up':n<0?'dn':'';
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -383,7 +395,8 @@ function renderDonut(){
   $('dcv').textContent=fUSD0(tot).replace('US$ ','');
   $('leg').innerHTML=g.map((x,i)=>
     '<div><span class="sw" style="background:'+COL[i%COL.length]+'"></span>'+
-    '<em>'+esc(x.grupo)+'</em><b>'+(tot?(x.valor/tot*100).toFixed(1):0)+'%</b></div>').join('');
+    '<i><em>'+esc(x.grupo)+'</em>'+
+    '<b>'+fUSD0(x.valor)+' · '+nf(tot?x.valor/tot*100:0,1)+'%</b></i></div>').join('');
   if(chart) chart.destroy();
   chart=new Chart($('donut'),{
     type:'doughnut',
@@ -499,9 +512,33 @@ function detalle(p){
 }
 
 /** Detalle de una fila del histórico (sirve para abiertas y cerradas). */
+/* Todas las compras del ticker, abiertas y cerradas, en orden cronológico.
+   La que sigue abierta no tiene precio de venta: ahí se distingue. */
+function tablaOperaciones(ticker){
+  const ops=(D.operacionesHist&&D.operacionesHist[ticker.toUpperCase()])||[];
+  if(!ops.length) return '';
+  const ab=ops.filter(o=>o.abierta).length;
+  const sub=ops.length+(ops.length===1?' operación':' operaciones')+
+    (ab?' · '+ab+(ab===1?' abierta':' abiertas'):'');
+  return '<h2 style="margin-left:0">Operaciones <span>'+sub+'</span></h2>'+
+    '<div class="card" style="padding:4px 16px 12px"><table class="ops">'+
+    '<thead><tr><th>Fecha</th><th>Cant.</th><th>Compra</th><th>Venta</th>'+
+    '<th>Result.</th><th>Rend.</th></tr></thead><tbody>'+
+    ops.map(o=>'<tr'+(o.abierta?' class="viva"':'')+'>'+
+      '<td>'+esc(fFecha(o.fecha))+'</td>'+
+      '<td>'+fCant(o.cantidad)+'</td>'+
+      '<td>'+nf(o.precioCompra,2)+'</td>'+
+      '<td>'+(o.abierta?'<span class="na">—</span>':nf(o.precioVenta,2))+'</td>'+
+      '<td class="'+cls(o.resultado)+'">'+(o.resultado>0?'+':o.resultado<0?'−':'')+nf(o.resultado,2)+'</td>'+
+      '<td class="'+cls(o.rend)+'">'+fPct(o.rend)+'</td></tr>').join('')+
+    '</tbody></table>'+
+    '<div style="font-size:11px;color:var(--tx3);padding-top:9px;line-height:1.45">'+
+    'Valores en US$. Las filas sin precio de venta son las que siguen abiertas: '+
+    'ahí el resultado todavía no está realizado.</div></div>';
+}
+
 function detalleHist(x){
   const p=(D.posiciones||[]).find(q=>q.ticker.toUpperCase()===x.ticker.toUpperCase());
-  const ops=(D.operaciones&&D.operaciones[x.ticker])||[];
   const badge=x.abierta?'<span class="tag on" style="margin-left:7px">abierta</span>'
                        :'<span class="tag" style="margin-left:7px">cerrada</span>';
   abrirSheet(
@@ -525,12 +562,7 @@ function detalleHist(x){
       :'<div style="font-size:12px;color:var(--tx3);margin:0 4px 14px;line-height:1.5">'+
        'Posición cerrada: el P&L de arriba ya está realizado.</div>')+
     tablaDividendos(x.ticker)+
-    (ops.length?'<h2 style="margin-left:0">Operaciones abiertas <span>'+ops.length+'</span></h2>'+
-      '<div class="card" style="padding:4px 16px 12px"><table>'+
-      '<thead><tr><th>Fecha</th><th>Cant.</th><th>Compra</th><th>Rend.</th></tr></thead><tbody>'+
-      ops.map(o=>'<tr><td>'+esc(o.fecha)+'</td><td>'+fCant(o.cantidad)+'</td>'+
-        '<td>'+nf(o.precioCompra,2)+'</td><td class="'+cls(o.rend)+'">'+fPct(o.rend)+'</td></tr>').join('')+
-      '</tbody></table></div>':'')
+    tablaOperaciones(x.ticker)
   );
 }
 function cerrar(){$('ov').classList.remove('on')}
