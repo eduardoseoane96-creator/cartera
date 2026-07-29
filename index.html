@@ -303,13 +303,23 @@ function totalCosto(){ return (D.posiciones||[]).reduce((a,p)=>a+p.costo,0); }
 
    El delta usa la valuación de la pestaña en la que estés: por CEDEAR en
    Patrimonio, por acción entera en Cartera e Histórico. */
+/* Si estamos valuando por CEDEAR y justo ese CEDEAR no cotizó, `pnlCed` cae a
+   `pnlVivo`, que es la acción entera: ajustar con eso cambiaría la base de
+   valuación sin avisar. En ese caso no se ajusta y queda el valor de la hoja. */
+function ajustable(p){
+  if(!ced()) return true;
+  const esCed=(p.tipo||'').toLowerCase().includes('cedear');
+  return !esCed || !!p.precioCedRaw;
+}
+function deltaDe(p){ return ajustable(p) ? pnlDe(p)-(p.pnl||0) : 0; }
+
 function deltasPorTicker(){
   const m={};
-  (D.posiciones||[]).forEach(p=>{ m[p.ticker.toUpperCase()]=pnlDe(p)-(p.pnl||0); });
+  (D.posiciones||[]).forEach(p=>{ m[p.ticker.toUpperCase()]=deltaDe(p); });
   return m;
 }
 function deltaVivo(){
-  return (D.posiciones||[]).reduce((a,p)=>a+(pnlDe(p)-(p.pnl||0)),0);
+  return (D.posiciones||[]).reduce((a,p)=>a+deltaDe(p),0);
 }
 
 /** El histórico con las posiciones abiertas revaluadas al precio de ahora. */
@@ -637,7 +647,7 @@ function tablaOperaciones(ticker){
      variación entre los dos. Así la suma de la columna coincide siempre con el
      P&L que muestra el encabezado del ticker. */
   const p=(D.posiciones||[]).find(q=>q.ticker.toUpperCase()===ticker.toUpperCase());
-  const prAhora=p?precioDe(p):0;
+  const prAhora=(p&&ajustable(p))?precioDe(p):0;
   const vivoDe=o=>{
     if(!o.abierta||!prAhora||!o.precioCompra) return {res:o.resultado,rend:o.rend};
     const v=prAhora/o.precioCompra-1;
@@ -666,6 +676,23 @@ function tablaOperaciones(ticker){
     '</div></div>';
 }
 
+/* De dónde sale el P&L que se muestra: el de la hoja, más el ajuste al precio
+   de hoy. Sirve para poder auditar el número a simple vista. */
+function origenDelPnl(x,p){
+  if(!p) return '';
+  const d=deltaDe(p);
+  const base=x.pnlNeto-d;
+  const fuente=ced()
+    ? (p.precioCedRaw?'CEDEAR '+esc(p.tickerCed||'')+' a '+fUSD(p.precioCedRaw)+' × '+p.ratio
+                     :'precio de mercado')
+    : (p.fuenteVivo||'la planilla');
+  if(!d) return '<div style="font-size:11.5px;color:var(--tx3);margin:-6px 4px 14px;line-height:1.5">'+
+    'Sin ajuste: no llegó el precio del CEDEAR, así que se muestra el valor de la planilla.</div>';
+  return '<div style="font-size:11.5px;color:var(--tx3);margin:-6px 4px 14px;line-height:1.5">'+
+    'P&L de la planilla '+fUSD(base)+' · ajuste a precio de hoy '+
+    '<span class="'+cls(d)+'">'+(d>0?'+':'')+fUSD(d)+'</span> · vía '+fuente+'</div>';
+}
+
 function detalleHist(x){
   const p=(D.posiciones||[]).find(q=>q.ticker.toUpperCase()===x.ticker.toUpperCase());
   const badge=x.abierta?'<span class="tag on" style="margin-left:7px">abierta</span>'
@@ -681,6 +708,7 @@ function detalleHist(x){
       fila('Rentas y dividendos',fUSD(x.rentas))+
       fila('Operaciones',String(x.operaciones))+
     '</div>'+
+    origenDelPnl(x,p)+
     (p?'<h2 style="margin-left:0">Posición actual</h2><div class="card" style="padding:14px 16px">'+
       fila('Tenencia',fCant(p.cantidad))+
       fila('Precio ahora',fUSD(precioDe(p)))+
