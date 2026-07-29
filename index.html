@@ -114,6 +114,8 @@ table.ops{font-size:11.5px;table-layout:fixed}
 table.ops th{font-size:10px}
 table.ops td{padding:7px 0 6px}
 table.ops th:first-child,table.ops td:first-child{width:23%}
+table.ops.abiertas{font-size:12px}
+table.ops.abiertas th{font-size:10.5px}
 table.ops .na{color:var(--tx3)}
 table.ops tr.viva td:first-child{position:relative;padding-left:8px}
 table.ops tr.viva td:first-child::before{content:'';position:absolute;left:0;top:50%;
@@ -605,7 +607,6 @@ function tablaDividendos(ticker){
 }
 
 function detalle(p){
-  const ops=(D.operaciones&&D.operaciones[p.ticker])||[];
   const eq=p.ratio?' · '+fCant(p.cantidad*p.ratio)+' CEDEARs (ratio '+p.ratio+')':'';
   const enCed=ced();
 
@@ -643,20 +644,16 @@ function detalle(p){
       '<div style="font-size:11.5px;color:var(--tx3);padding-top:10px;line-height:1.45">'+otra.nota+'</div>'+
       '</div>':'')+
     tablaDividendos(p.ticker)+
-    (ops.length?'<h2 style="margin-left:0">Operaciones <span>'+ops.length+'</span></h2>'+
-      '<div class="card" style="padding:4px 16px 12px"><table>'+
-      '<thead><tr><th>Fecha</th><th>Cant.</th><th>Compra</th><th>Rend.</th></tr></thead><tbody>'+
-      ops.map(o=>'<tr><td>'+esc(o.fecha)+'</td><td>'+fCant(o.cantidad)+'</td>'+
-        '<td>'+nf(o.precioCompra,2)+'</td><td class="'+cls(o.rend)+'">'+fPct(o.rend)+'</td></tr>').join('')+
-      '</tbody></table></div>':'')
+    tablaOperaciones(p.ticker,true)
   );
 }
 
-/** Detalle de una fila del histórico (sirve para abiertas y cerradas). */
-/* Todas las compras del ticker, abiertas y cerradas, en orden cronológico.
-   La que sigue abierta no tiene precio de venta: ahí se distingue. */
-function tablaOperaciones(ticker){
-  const ops=(D.operacionesHist&&D.operacionesHist[ticker.toUpperCase()])||[];
+/* La tabla de operaciones de un ticker.
+   soloAbiertas -> las compras que forman la posición de hoy (Cartera y
+   Patrimonio). Sin ese modo salen todas, abiertas y cerradas (Histórico). */
+function tablaOperaciones(ticker,soloAbiertas){
+  const todas=(D.operacionesHist&&D.operacionesHist[ticker.toUpperCase()])||[];
+  const ops=soloAbiertas?todas.filter(o=>o.abierta):todas;
   if(!ops.length) return '';
   const ab=ops.filter(o=>o.abierta).length;
 
@@ -694,27 +691,39 @@ function tablaOperaciones(ticker){
     const res=o.costo*(prAhora/o.precioCompra-1)*escala;
     return {res:res, rend:o.costo?res/o.costo*100:0};
   };
-  const sub=ops.length+(ops.length===1?' operación':' operaciones')+
-    (ab?' · '+ab+(ab===1?' abierta':' abiertas'):'');
-  return '<h2 style="margin-left:0">Operaciones <span>'+sub+'</span></h2>'+
-    '<div class="card" style="padding:4px 16px 12px"><table class="ops">'+
-    '<thead><tr><th>Fecha</th><th>Cant.</th><th>Compra</th><th>Venta</th>'+
+  // Sin las cerradas, la columna Venta iría siempre vacía: se saca y las demás
+  // quedan más anchas.
+  const titulo=soloAbiertas?'Operaciones abiertas':'Operaciones';
+  const sub=soloAbiertas
+    ? ops.length+(ops.length===1?' compra':' compras')
+    : ops.length+(ops.length===1?' operación':' operaciones')+
+      (ab?' · '+ab+(ab===1?' abierta':' abiertas'):'');
+
+  const pie=soloAbiertas
+    ? 'Valores en US$. El resultado y el rendimiento de cada compra se calculan '+
+      'con el precio de ahora, así que son los de esta pestaña: '+
+      (ced()?'valuados por CEDEAR.':'valuados por la acción en su mercado de origen.')
+    : 'Valores en US$. Las filas sin precio de venta son las que siguen abiertas: '+
+      'ahí el resultado todavía no está realizado y se recalcula con el precio de ahora.';
+
+  return '<h2 style="margin-left:0">'+titulo+' <span>'+sub+'</span></h2>'+
+    '<div class="card" style="padding:4px 16px 12px"><table class="ops'+(soloAbiertas?' abiertas':'')+'">'+
+    '<thead><tr><th>Fecha</th><th>Cant.</th><th>Compra</th>'+
+    (soloAbiertas?'':'<th>Venta</th>')+
     '<th>Result.</th><th>Rend.</th></tr></thead><tbody>'+
     ops.map(o=>{
       const v=vivoDe(o);
-      return '<tr'+(o.abierta?' class="viva"':'')+'>'+
+      return '<tr'+(o.abierta&&!soloAbiertas?' class="viva"':'')+'>'+
       '<td>'+esc(fFecha(o.fecha))+'</td>'+
       '<td>'+fCant(o.cantidad)+'</td>'+
       '<td>'+nf(o.precioCompra,2)+'</td>'+
-      '<td>'+(o.abierta?'<span class="na">—</span>':nf(o.precioVenta,2))+'</td>'+
+      (soloAbiertas?'':'<td>'+(o.abierta?'<span class="na">—</span>':nf(o.precioVenta,2))+'</td>')+
       '<td class="'+cls(v.res)+'">'+(v.res>0?'+':v.res<0?'−':'')+nf(v.res,2)+'</td>'+
       '<td class="'+cls(v.rend)+'">'+fPct(v.rend)+'</td></tr>';
     }).join('')+
     '</tbody></table>'+
     '<div style="font-size:11px;color:var(--tx3);padding-top:9px;line-height:1.45">'+
-    'Valores en US$. Las filas sin precio de venta son las que siguen abiertas: '+
-    'ahí el resultado todavía no está realizado y se recalcula con el precio de ahora.'+
-    '</div></div>';
+    pie+'</div></div>';
 }
 
 /* De dónde sale el P&L que se muestra: el de la hoja, más el ajuste al precio
