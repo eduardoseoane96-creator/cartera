@@ -291,7 +291,15 @@ const pnlDe=p=>ced()?(p.pnlCed!=null?p.pnlCed:p.pnl)
 const rendDe=p=>ced()?(p.rendCed!=null?p.rendCed:p.rend)
                      :(p.precioVivo?p.rendVivo:p.rend);
 const precioDe=p=>ced()?(p.precioCed||p.precioActual):(p.precioVivo||p.precioActual);
-const enVivo=p=>ced()?!!p.precioCedRaw:!!p.precioVivo;
+
+/* ¿Esta posición se valúa por CEDEAR? Las ON, los bonos y la cripto no tienen,
+   así que en Patrimonio e Histórico igual van por su precio de mercado. */
+const tieneCedear=p=>!!p.tickerCed||(p.tipo||'').toLowerCase().includes('cedear');
+
+/* Precio en vivo según la pestaña. Un CEDEAR está en vivo si cotizó el CEDEAR;
+   lo que no tiene CEDEAR, si cotizó su mercado. Antes se pedía `precioCedRaw` a
+   todos, y las ON y BTC aparecían como si no estuvieran en vivo. */
+const enVivo=p=>ced()?(tieneCedear(p)?!!p.precioCedRaw:!!p.precioVivo):!!p.precioVivo;
 
 function totalPosiciones(){ return (D.posiciones||[]).reduce((a,p)=>a+vivo(p),0); }
 function totalCosto(){ return (D.posiciones||[]).reduce((a,p)=>a+p.costo,0); }
@@ -310,8 +318,7 @@ function totalCosto(){ return (D.posiciones||[]).reduce((a,p)=>a+p.costo,0); }
    valuación sin avisar. En ese caso no se ajusta y queda el valor de la hoja. */
 function ajustable(p){
   if(!ced()) return true;
-  const esCed=(p.tipo||'').toLowerCase().includes('cedear');
-  return !esCed || !!p.precioCedRaw;
+  return !tieneCedear(p) || !!p.precioCedRaw;
 }
 function deltaDe(p){ return ajustable(p) ? pnlDe(p)-(p.pnl||0) : 0; }
 
@@ -470,7 +477,9 @@ function grupos(){
 
 /* ---------- render ---------- */
 function render(){
-  const vivos=ced()?(D.cotizadosCedear||0):(D.cotizados||0);
+  // Se cuenta con el mismo criterio que la etiqueta "vivo" de cada fila, así el
+  // número de arriba y las etiquetas de abajo no pueden contradecirse.
+  const vivos=(D.posiciones||[]).filter(enVivo).length;
   $('upd').innerHTML = vivos
     ? '<span class="dot"></span>'+vivos+' en vivo · planilla '+esc(D.actualizado||'')
     : 'Actualizado '+esc(D.actualizado||'');
@@ -652,9 +661,25 @@ function detalle(p){
    soloAbiertas -> las compras que forman la posición de hoy (Cartera y
    Patrimonio). Sin ese modo salen todas, abiertas y cerradas (Histórico). */
 function tablaOperaciones(ticker,soloAbiertas){
-  const todas=(D.operacionesHist&&D.operacionesHist[ticker.toUpperCase()])||[];
+  const clave=String(ticker||'').trim().toUpperCase();
+  const todas=(D.operacionesHist&&D.operacionesHist[clave])||[];
   const ops=soloAbiertas?todas.filter(o=>o.abierta):todas;
-  if(!ops.length) return '';
+
+  /* Si no hay nada que mostrar, se dice por qué en vez de no mostrar la sección:
+     no es lo mismo que la planilla no traiga operaciones a que ninguna quede
+     marcada como abierta, y sin este aviso las dos cosas se ven igual. */
+  if(!ops.length){
+    const motivo = !D.operacionesHist
+      ? 'El Apps Script todavía no está devolviendo las operaciones. Hay que publicar una versión nueva del despliegue.'
+      : !todas.length
+        ? 'No encontré operaciones de '+esc(ticker)+' en INVERSIONES.'
+        : (todas.length===1?'La única operación de ':'Las '+todas.length+' operaciones de ')+
+          esc(ticker)+' figura'+(todas.length===1?'':'n')+' como cerrada'+(todas.length===1?'':'s')+'. '+
+          'Se marcan por el color de fondo del ticker en INVERSIONES: las abiertas van en blanco.';
+    return '<h2 style="margin-left:0">Operaciones</h2>'+
+      '<div class="card" style="padding:14px 16px;font-size:12px;color:var(--tx3);line-height:1.5">'+
+      motivo+'</div>';
+  }
   const ab=ops.filter(o=>o.abierta).length;
 
   /* Las operaciones cerradas ya tienen su resultado realizado y no se tocan.
