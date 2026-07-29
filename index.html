@@ -288,6 +288,59 @@ const enVivo=p=>ced()?!!p.precioCedRaw:!!p.precioVivo;
 function totalPosiciones(){ return (D.posiciones||[]).reduce((a,p)=>a+vivo(p),0); }
 function totalCosto(){ return (D.posiciones||[]).reduce((a,p)=>a+p.costo,0); }
 
+/* ---------- ajuste a precios de hoy ----------
+   Las hojas generadas (Dashboard, P&L por Activo) son una foto: el P&L de una
+   posición que sigue abierta se calculó con el precio que tenía la planilla el
+   día que corriste el script. Acá se le resta ese no realizado viejo y se le
+   suma el de ahora, así todo se mueve con los precios en vivo sin tener que
+   regenerar nada desde la computadora.
+
+   El delta usa la valuación de la pestaña en la que estés: por CEDEAR en
+   Patrimonio, por acción entera en Cartera e Histórico. */
+function deltasPorTicker(){
+  const m={};
+  (D.posiciones||[]).forEach(p=>{ m[p.ticker.toUpperCase()]=pnlDe(p)-(p.pnl||0); });
+  return m;
+}
+function deltaVivo(){
+  return (D.posiciones||[]).reduce((a,p)=>a+(pnlDe(p)-(p.pnl||0)),0);
+}
+
+/** El histórico con las posiciones abiertas revaluadas al precio de ahora. */
+function historicoVivo(){
+  const d=deltasPorTicker();
+  return (D.historico||[]).map(x=>{
+    const ajuste=d[x.ticker.toUpperCase()];
+    if(!ajuste) return x;
+    const pb=x.pnlBruto+ajuste, pn=x.pnlNeto+ajuste;
+    return Object.assign({},x,{ pnlBruto:pb, pnlNeto:pn,
+      rendBruto:x.invertido?pb/x.invertido*100:x.rendBruto,
+      rendNeto: x.invertido?pn/x.invertido*100:x.rendNeto });
+  });
+}
+
+/** Mejores y peores, recalculados sobre el histórico vivo. */
+function topsVivos(h){
+  const ord=h.slice().sort((a,b)=>b.pnlNeto-a.pnlNeto);
+  return { win:ord.filter(x=>x.pnlNeto>0).slice(0,6),
+           los:ord.filter(x=>x.pnlNeto<0).reverse().slice(0,6) };
+}
+
+/** P&L por clase de activo, también sobre el histórico vivo. */
+function clasesVivas(h){
+  const m={};
+  h.forEach(x=>{
+    const k=x.clase||'Otros';
+    if(!m[k]) m[k]={clase:k,pnlNeto:0,capital:0,rentas:0};
+    m[k].pnlNeto+=x.pnlNeto; m[k].capital+=x.invertido; m[k].rentas+=x.rentas;
+  });
+  return Object.keys(m).map(k=>{
+    const c=m[k];
+    c.rendNeto=c.capital?c.pnlNeto/c.capital*100:0;
+    return c;
+  }).sort((a,b)=>b.pnlNeto-a.pnlNeto);
+}
+
 function totales(){
   const t=D.totales;
   if(vista==='patrimonio'){
@@ -295,7 +348,8 @@ function totales(){
     // tarjeta de abajo. "dif" ajusta por la diferencia entre el valor que
     // tiene la planilla y el que traen los precios en vivo.
     const dif=totalPosiciones()-t.subtotalValor;
-    return { titulo:'Activos totales', valor:(t.totalCartera||0)+dif, pnl:D.resumen.pnlNetoTotal||0, pct:null,
+    return { titulo:'Activos totales', valor:(t.totalCartera||0)+dif,
+      pnl:(D.resumen.pnlNetoTotal||0)+deltaVivo(), pct:null,
       minis:[['Patrimonio neto',fUSD0((t.patrimonioNeto||0)+dif)],['Deudas',fUSD0(t.deudas)]] };
   }
   // Cartera: solo lo invertido a valor de hoy. El efectivo no se suma acá,
@@ -423,11 +477,13 @@ function render(){
       '<div class="bar"><i style="width:'+(Math.abs(x.pnlNeto)/mx*100).toFixed(1)+'%;background:'+
       (neg?'var(--dn)':'var(--up)')+'"></i></div>').join('');
   };
-  $('win').innerHTML=mini(D.topGanadores,false);
-  $('los').innerHTML=mini(D.topPerdedores,true);
-  $('topsWrap').classList.toggle('hidden',!(D.topGanadores||[]).length&&!(D.topPerdedores||[]).length);
+  const hv=historicoVivo();
+  const tops=hv.length?topsVivos(hv):{win:D.topGanadores||[],los:D.topPerdedores||[]};
+  $('win').innerHTML=mini(tops.win,false);
+  $('los').innerHTML=mini(tops.los,true);
+  $('topsWrap').classList.toggle('hidden',!tops.win.length&&!tops.los.length);
 
-  const cl=D.pnlPorClase||[];
+  const cl=hv.length?clasesVivas(hv):(D.pnlPorClase||[]);
   $('claseWrap').classList.toggle('hidden',!cl.length);
   if(cl.length) $('clase').innerHTML=cl.map((c,i)=>
     '<div class="row" style="cursor:default">'+
@@ -457,7 +513,7 @@ function renderDonut(){
 }
 
 function renderHist(){
-  const h=D.historico||[];
+  const h=historicoVivo();
   const neto=h.reduce((a,x)=>a+x.pnlNeto,0);
   const inv=h.reduce((a,x)=>a+x.invertido,0);
   const rentas=h.reduce((a,x)=>a+x.rentas,0);
@@ -567,23 +623,41 @@ function tablaOperaciones(ticker){
   const ops=(D.operacionesHist&&D.operacionesHist[ticker.toUpperCase()])||[];
   if(!ops.length) return '';
   const ab=ops.filter(o=>o.abierta).length;
+
+  /* Las operaciones cerradas ya tienen su resultado realizado y no se tocan.
+     Las abiertas se revalúan al precio de ahora: el de la planilla se calculó
+     el día que corriste el script. Como precioCompra y precioDe() están en la
+     misma convención (por acción, o "por 100" en ON y bonos), alcanza con la
+     variación entre los dos. Así la suma de la columna coincide siempre con el
+     P&L que muestra el encabezado del ticker. */
+  const p=(D.posiciones||[]).find(q=>q.ticker.toUpperCase()===ticker.toUpperCase());
+  const prAhora=p?precioDe(p):0;
+  const vivoDe=o=>{
+    if(!o.abierta||!prAhora||!o.precioCompra) return {res:o.resultado,rend:o.rend};
+    const v=prAhora/o.precioCompra-1;
+    return {res:o.costo*v, rend:v*100};
+  };
   const sub=ops.length+(ops.length===1?' operación':' operaciones')+
     (ab?' · '+ab+(ab===1?' abierta':' abiertas'):'');
   return '<h2 style="margin-left:0">Operaciones <span>'+sub+'</span></h2>'+
     '<div class="card" style="padding:4px 16px 12px"><table class="ops">'+
     '<thead><tr><th>Fecha</th><th>Cant.</th><th>Compra</th><th>Venta</th>'+
     '<th>Result.</th><th>Rend.</th></tr></thead><tbody>'+
-    ops.map(o=>'<tr'+(o.abierta?' class="viva"':'')+'>'+
+    ops.map(o=>{
+      const v=vivoDe(o);
+      return '<tr'+(o.abierta?' class="viva"':'')+'>'+
       '<td>'+esc(fFecha(o.fecha))+'</td>'+
       '<td>'+fCant(o.cantidad)+'</td>'+
       '<td>'+nf(o.precioCompra,2)+'</td>'+
       '<td>'+(o.abierta?'<span class="na">—</span>':nf(o.precioVenta,2))+'</td>'+
-      '<td class="'+cls(o.resultado)+'">'+(o.resultado>0?'+':o.resultado<0?'−':'')+nf(o.resultado,2)+'</td>'+
-      '<td class="'+cls(o.rend)+'">'+fPct(o.rend)+'</td></tr>').join('')+
+      '<td class="'+cls(v.res)+'">'+(v.res>0?'+':v.res<0?'−':'')+nf(v.res,2)+'</td>'+
+      '<td class="'+cls(v.rend)+'">'+fPct(v.rend)+'</td></tr>';
+    }).join('')+
     '</tbody></table>'+
     '<div style="font-size:11px;color:var(--tx3);padding-top:9px;line-height:1.45">'+
     'Valores en US$. Las filas sin precio de venta son las que siguen abiertas: '+
-    'ahí el resultado todavía no está realizado.</div></div>';
+    'ahí el resultado todavía no está realizado y se recalcula con el precio de ahora.'+
+    '</div></div>';
 }
 
 function detalleHist(x){
