@@ -335,6 +335,12 @@ function historicoVivo(){
   });
 }
 
+/** P&L neto acumulado. Única fuente para Patrimonio y para el Histórico. */
+function pnlNetoAcumulado(){
+  const h=historicoVivo();
+  return h.length ? h.reduce((a,x)=>a+x.pnlNeto,0) : (D.resumen&&D.resumen.pnlNetoTotal)||0;
+}
+
 /** Mejores y peores, recalculados sobre el histórico vivo. */
 function topsVivos(h){
   const ord=h.slice().sort((a,b)=>b.pnlNeto-a.pnlNeto);
@@ -364,8 +370,12 @@ function totales(){
     // tarjeta de abajo. "dif" ajusta por la diferencia entre el valor que
     // tiene la planilla y el que traen los precios en vivo.
     const dif=totalPosiciones()-t.subtotalValor;
+    // El P&L sale de la misma suma que usa el Histórico. Antes partía del total
+    // del Dashboard, que viene redondeado a 2 decimales de una sola vez,
+    // mientras el Histórico suma 154 renglones redondeados de a uno: los dos
+    // números diferían por centavos sin ninguna razón de fondo.
     return { titulo:'Activos totales', valor:(t.totalCartera||0)+dif,
-      pnl:(D.resumen.pnlNetoTotal||0)+deltaVivo(), pct:null,
+      pnl:pnlNetoAcumulado(), pct:null,
       minis:[['Patrimonio neto',fUSD0((t.patrimonioNeto||0)+dif)],['Deudas',fUSD0(t.deudas)]] };
   }
   // Cartera: solo lo invertido a valor de hoy. El efectivo no se suma acá,
@@ -648,10 +658,31 @@ function tablaOperaciones(ticker){
      P&L que muestra el encabezado del ticker. */
   const p=(D.posiciones||[]).find(q=>q.ticker.toUpperCase()===ticker.toUpperCase());
   const prAhora=(p&&ajustable(p))?precioDe(p):0;
+
+  /* La suma de las abiertas tiene que dar exactamente el mismo P&L que muestran
+     Cartera y Patrimonio. No lo da sola: la tenencia de la posición se deduce
+     como `valor actual ÷ precio actual` (dos valores ya redondeados a 2
+     decimales) y la de las operaciones sale de la columna CANTIDAD de
+     INVERSIONES. Las dos cantidades difieren en los últimos decimales, y en BTC
+     se nota porque tiene 8 decimales de cantidad y un precio de 5 cifras.
+     Se corrige con un factor común, así ningún renglón queda desalineado y la
+     columna cierra con el encabezado. */
+  const crudo=ops.reduce((a,o)=>
+    a+((o.abierta&&prAhora&&o.precioCompra)?o.costo*(prAhora/o.precioCompra-1):0),0);
+  const objetivo=(p&&prAhora)?pnlDe(p):0;
+  let escala=1;
+  if(prAhora&&Math.abs(crudo)>0.005){
+    const e=objetivo/crudo;
+    // Solo corrige redondeo. Si la diferencia es grande, hay una inconsistencia
+    // de datos de fondo y taparla con un factor sería peor: se deja el cálculo
+    // directo, que al menos es auditable renglón por renglón.
+    if(e>0.98&&e<1.02) escala=e;
+  }
+
   const vivoDe=o=>{
     if(!o.abierta||!prAhora||!o.precioCompra) return {res:o.resultado,rend:o.rend};
-    const v=prAhora/o.precioCompra-1;
-    return {res:o.costo*v, rend:v*100};
+    const res=o.costo*(prAhora/o.precioCompra-1)*escala;
+    return {res:res, rend:o.costo?res/o.costo*100:0};
   };
   const sub=ops.length+(ops.length===1?' operación':' operaciones')+
     (ab?' · '+ab+(ab===1?' abierta':' abiertas'):'');
