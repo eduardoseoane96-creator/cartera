@@ -304,43 +304,58 @@ const enVivo=p=>ced()?(tieneCedear(p)?!!p.precioCedRaw:!!p.precioVivo):!!p.preci
 function totalPosiciones(){ return (D.posiciones||[]).reduce((a,p)=>a+vivo(p),0); }
 function totalCosto(){ return (D.posiciones||[]).reduce((a,p)=>a+p.costo,0); }
 
-/* ---------- ajuste a precios de hoy ----------
-   Las hojas generadas (Dashboard, P&L por Activo) son una foto: el P&L de una
-   posición que sigue abierta se calculó con el precio que tenía la planilla el
-   día que corriste el script. Acá se le resta ese no realizado viejo y se le
-   suma el de ahora, así todo se mueve con los precios en vivo sin tener que
-   regenerar nada desde la computadora.
+/* ---------- P&L a precios de hoy ----------
+   Todo se arma sumando operaciones. El API entrega, por ticker, lo que ya está
+   cerrado y las rentas cobradas; lo que sigue abierto se revalúa acá con el
+   precio del momento. Así el total de una pestaña es literalmente la suma de lo
+   que muestra su detalle, y no dos cuentas separadas que hay que hacer
+   coincidir después.
 
-   El delta usa la valuación de la pestaña en la que estés: por CEDEAR en
-   Patrimonio, por acción entera en Cartera e Histórico. */
+   La valuación es la de la pestaña: por CEDEAR en Patrimonio e Histórico, por
+   acción entera en Cartera. */
+
 /* Si estamos valuando por CEDEAR y justo ese CEDEAR no cotizó, `pnlCed` cae a
-   `pnlVivo`, que es la acción entera: ajustar con eso cambiaría la base de
-   valuación sin avisar. En ese caso no se ajusta y queda el valor de la hoja. */
+   `pnlVivo`, que es la acción entera: usar eso cambiaría la base de valuación
+   sin avisar. En ese caso no se revalúa nada y queda el valor de la planilla. */
 function ajustable(p){
   if(!ced()) return true;
   return !tieneCedear(p) || !!p.precioCedRaw;
 }
-function deltaDe(p){ return ajustable(p) ? pnlDe(p)-(p.pnl||0) : 0; }
 
-function deltasPorTicker(){
-  const m={};
-  (D.posiciones||[]).forEach(p=>{ m[p.ticker.toUpperCase()]=deltaDe(p); });
-  return m;
+/** Precio de referencia del ticker, o 0 si no hay uno confiable. */
+function precioTicker(ticker){
+  const p=(D.posiciones||[]).find(q=>q.ticker.toUpperCase()===String(ticker||'').trim().toUpperCase());
+  return (p&&ajustable(p))?precioDe(p):0;
 }
-function deltaVivo(){
-  return (D.posiciones||[]).reduce((a,p)=>a+deltaDe(p),0);
+
+/** Resultado de una operación. Las cerradas ya están realizadas y no se tocan. */
+function resultadoOp(o,precioAhora){
+  if(!o.abierta||!precioAhora||!o.precioCompra) return {res:o.resultado,rend:o.rend};
+  const v=precioAhora/o.precioCompra-1;
+  return {res:o.costo*v, rend:v*100};
+}
+
+function opsDe(ticker){
+  return (D.operacionesHist&&D.operacionesHist[String(ticker||'').trim().toUpperCase()])||[];
+}
+
+/** P&L bruto del ticker = suma de sus operaciones al precio de hoy. */
+function pnlBrutoVivo(ticker){
+  const ops=opsDe(ticker);
+  if(!ops.length) return null;
+  const pr=precioTicker(ticker);
+  return ops.reduce((a,o)=>a+resultadoOp(o,pr).res,0);
 }
 
 /** El histórico con las posiciones abiertas revaluadas al precio de ahora. */
 function historicoVivo(){
-  const d=deltasPorTicker();
   return (D.historico||[]).map(x=>{
-    const ajuste=d[x.ticker.toUpperCase()];
-    if(!ajuste) return x;
-    const pb=x.pnlBruto+ajuste, pn=x.pnlNeto+ajuste;
-    return Object.assign({},x,{ pnlBruto:pb, pnlNeto:pn,
-      rendBruto:x.invertido?pb/x.invertido*100:x.rendBruto,
-      rendNeto: x.invertido?pn/x.invertido*100:x.rendNeto });
+    const bruto=pnlBrutoVivo(x.ticker);
+    if(bruto===null) return x;              // sin operaciones: solo dividendos
+    const neto=bruto+(x.rentas||0);
+    return Object.assign({},x,{ pnlBruto:bruto, pnlNeto:neto,
+      rendBruto:x.invertido?bruto/x.invertido*100:x.rendBruto,
+      rendNeto: x.invertido?neto/x.invertido*100:x.rendNeto });
   });
 }
 
@@ -682,40 +697,12 @@ function tablaOperaciones(ticker,soloAbiertas){
   }
   const ab=ops.filter(o=>o.abierta).length;
 
-  /* Las operaciones cerradas ya tienen su resultado realizado y no se tocan.
-     Las abiertas se revalúan al precio de ahora: el de la planilla se calculó
-     el día que corriste el script. Como precioCompra y precioDe() están en la
-     misma convención (por acción, o "por 100" en ON y bonos), alcanza con la
-     variación entre los dos. Así la suma de la columna coincide siempre con el
-     P&L que muestra el encabezado del ticker. */
-  const p=(D.posiciones||[]).find(q=>q.ticker.toUpperCase()===ticker.toUpperCase());
-  const prAhora=(p&&ajustable(p))?precioDe(p):0;
-
-  /* La suma de las abiertas tiene que dar exactamente el mismo P&L que muestran
-     Cartera y Patrimonio. No lo da sola: la tenencia de la posición se deduce
-     como `valor actual ÷ precio actual` (dos valores ya redondeados a 2
-     decimales) y la de las operaciones sale de la columna CANTIDAD de
-     INVERSIONES. Las dos cantidades difieren en los últimos decimales, y en BTC
-     se nota porque tiene 8 decimales de cantidad y un precio de 5 cifras.
-     Se corrige con un factor común, así ningún renglón queda desalineado y la
-     columna cierra con el encabezado. */
-  const crudo=ops.reduce((a,o)=>
-    a+((o.abierta&&prAhora&&o.precioCompra)?o.costo*(prAhora/o.precioCompra-1):0),0);
-  const objetivo=(p&&prAhora)?pnlDe(p):0;
-  let escala=1;
-  if(prAhora&&Math.abs(crudo)>0.005){
-    const e=objetivo/crudo;
-    // Solo corrige redondeo. Si la diferencia es grande, hay una inconsistencia
-    // de datos de fondo y taparla con un factor sería peor: se deja el cálculo
-    // directo, que al menos es auditable renglón por renglón.
-    if(e>0.98&&e<1.02) escala=e;
-  }
-
-  const vivoDe=o=>{
-    if(!o.abierta||!prAhora||!o.precioCompra) return {res:o.resultado,rend:o.rend};
-    const res=o.costo*(prAhora/o.precioCompra-1)*escala;
-    return {res:res, rend:o.costo?res/o.costo*100:0};
-  };
+  /* Cada renglón se calcula con `resultadoOp`, la misma función que usa el
+     total del ticker y el acumulado de las pestañas. Por eso la columna cierra
+     con el encabezado por construcción, sin factores de corrección: los dos
+     números salen del mismo lugar. */
+  const prAhora=precioTicker(ticker);
+  const vivoDe=o=>resultadoOp(o,prAhora);
   // Sin las cerradas, la columna Venta iría siempre vacía: se saca y las demás
   // quedan más anchas.
   const titulo=soloAbiertas?'Operaciones abiertas':'Operaciones';
@@ -751,21 +738,35 @@ function tablaOperaciones(ticker,soloAbiertas){
     pie+'</div></div>';
 }
 
-/* De dónde sale el P&L que se muestra: el de la hoja, más el ajuste al precio
-   de hoy. Sirve para poder auditar el número a simple vista. */
+/* Cómo se compone el P&L que se muestra, para poder auditarlo a simple vista:
+   lo ya realizado, lo que todavía no, y las rentas cobradas. */
 function origenDelPnl(x,p){
-  if(!p) return '';
-  const d=deltaDe(p);
-  const base=x.pnlNeto-d;
-  const fuente=ced()
-    ? (p.precioCedRaw?'CEDEAR '+esc(p.tickerCed||'')+' a '+fUSD(p.precioCedRaw)+' × '+p.ratio
-                     :'precio de mercado')
-    : (p.fuenteVivo||'la planilla');
-  if(!d) return '<div style="font-size:11.5px;color:var(--tx3);margin:-6px 4px 14px;line-height:1.5">'+
-    'Sin ajuste: no llegó el precio del CEDEAR, así que se muestra el valor de la planilla.</div>';
+  const ops=opsDe(x.ticker);
+  if(!ops.length) return '';
+  const pr=precioTicker(x.ticker);
+  const cerradas=ops.filter(o=>!o.abierta), abiertas=ops.filter(o=>o.abierta);
+  const realizado=cerradas.reduce((a,o)=>a+o.resultado,0);
+  const noRealizado=abiertas.reduce((a,o)=>a+resultadoOp(o,pr).res,0);
+
+  const partes=[];
+  if(cerradas.length) partes.push('realizado <span class="'+cls(realizado)+'">'+
+    (realizado>0?'+':'')+fUSD(realizado)+'</span> en '+cerradas.length+
+    (cerradas.length===1?' operación cerrada':' operaciones cerradas'));
+  if(abiertas.length) partes.push('no realizado <span class="'+cls(noRealizado)+'">'+
+    (noRealizado>0?'+':'')+fUSD(noRealizado)+'</span> en '+abiertas.length+
+    (abiertas.length===1?' abierta':' abiertas'));
+  if(x.rentas) partes.push('rentas '+fUSD(x.rentas));
+
+  const nota = (abiertas.length && !pr)
+    ? ' · sin precio del CEDEAR, lo abierto queda al valor de la planilla'
+    : (abiertas.length && p)
+      ? ' · a precio de hoy vía '+(ced()
+          ? (p.precioCedRaw?'CEDEAR '+esc(p.tickerCed||''):'mercado')
+          : esc(p.fuenteVivo||'la planilla'))
+      : '';
+
   return '<div style="font-size:11.5px;color:var(--tx3);margin:-6px 4px 14px;line-height:1.5">'+
-    'P&L de la planilla '+fUSD(base)+' · ajuste a precio de hoy '+
-    '<span class="'+cls(d)+'">'+(d>0?'+':'')+fUSD(d)+'</span> · vía '+fuente+'</div>';
+    partes.join(' · ')+nota+'</div>';
 }
 
 function detalleHist(x){
