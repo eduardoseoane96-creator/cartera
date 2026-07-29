@@ -273,9 +273,15 @@ function logo(tk){
 }
 
 /* ---------- helpers de vista ----------
-   Cartera    -> precio de la acción entera (Yahoo)
-   Patrimonio -> precio implícito por CEDEAR (IOL × ratio), igual que la planilla */
-const ced=()=>vista==='patrimonio';
+   Cartera               -> precio de la acción entera (Yahoo)
+   Patrimonio e Histórico -> precio implícito por CEDEAR (IOL × ratio), igual
+                             que la planilla
+
+   El Histórico va por CEDEAR porque es la valuación con la que se llevan las
+   cuentas: lo que cobrás si vendés acá. Las posiciones sin CEDEAR (ON, bonos,
+   cripto) caen igual al precio de mercado, porque ahí los campos `Ced` se
+   completan con los `Vivo`. */
+const ced=()=>vista==='patrimonio'||vista==='historico';
 const vivo=p=>ced()?(p.valorCed!=null?p.valorCed:p.valorActual)
                    :(p.precioVivo?p.valorVivo:p.valorActual);
 const pnlDe=p=>ced()?(p.pnlCed!=null?p.pnlCed:p.pnl)
