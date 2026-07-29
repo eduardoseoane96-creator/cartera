@@ -335,10 +335,20 @@ function historicoVivo(){
   });
 }
 
-/** P&L neto acumulado. Única fuente para Patrimonio y para el Histórico. */
+/* P&L NETO ACUMULADO — una sola cuenta, la misma en Patrimonio y en Histórico.
+
+   Es literalmente la suma de los P&L que la app muestra activo por activo en la
+   pestaña Histórico: los que están abiertos ya vienen revaluados al precio de
+   ahora, así que el total se mueve solo con el mercado. Los negativos restan
+   por sumar en negativo.
+
+   No se usa el total del Dashboard: esa hoja es una foto que solo cambia cuando
+   se corre el script desde la computadora, y el objetivo es no depender de eso.
+   Lo único que sí sale de la planilla es la base de cada activo — resultado de
+   las operaciones ya cerradas y rentas cobradas — porque son hechos del pasado
+   que ningún precio de hoy puede cambiar. */
 function pnlNetoAcumulado(){
-  const h=historicoVivo();
-  return h.length ? h.reduce((a,x)=>a+x.pnlNeto,0) : (D.resumen&&D.resumen.pnlNetoTotal)||0;
+  return historicoVivo().reduce((a,x)=>a+x.pnlNeto,0);
 }
 
 /** Mejores y peores, recalculados sobre el histórico vivo. */
@@ -540,7 +550,7 @@ function renderDonut(){
 
 function renderHist(){
   const h=historicoVivo();
-  const neto=h.reduce((a,x)=>a+x.pnlNeto,0);
+  const neto=pnlNetoAcumulado();   // la misma cuenta que usa Patrimonio
   const inv=h.reduce((a,x)=>a+x.invertido,0);
   const rentas=h.reduce((a,x)=>a+x.rentas,0);
   $('hTot').textContent=(neto>0?'+':'')+fUSD(neto);
