@@ -45,7 +45,12 @@ body{
 .lbl{font-size:13px;color:var(--tx2)}
 .big{font-size:36px;font-weight:600;letter-spacing:-1.1px;line-height:1.1;margin:3px 0 0}
 .chg{display:flex;gap:9px;align-items:baseline;margin-top:7px;font-size:15px;font-weight:500;flex-wrap:wrap}
+/* El verde y el rojo tienen que ganarle a las reglas de cada componente.
+   `.tline b` fija un color propio y es más específica que `.up` a secas, así
+   que sin esto los valores de los bloques de detalle salían siempre neutros. */
 .up{color:var(--up)} .dn{color:var(--dn)}
+.tline b.up,.tcard .up,.rt .up{color:var(--up)}
+.tline b.dn,.tcard .dn,.rt .dn{color:var(--dn)}
 .pill{font-size:13px;padding:2px 8px;border-radius:20px;background:var(--card2);font-weight:500}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}
 .mini{background:var(--card2);border-radius:11px;padding:12px}
@@ -186,6 +191,11 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
         <div class="tcard"><h3>GANADORES</h3><div id="win"></div></div>
         <div class="tcard"><h3>PERDEDORES</h3><div id="los"></div></div>
       </div>
+    </div>
+
+    <div id="cobrosWrap" class="hidden">
+      <h2>Próximos cobros <span id="cobrosSub"></span></h2>
+      <div class="card" id="cobros"></div>
     </div>
 
     <div id="claseWrap">
@@ -647,6 +657,8 @@ function render(){
   $('los').innerHTML=mini(tops.los,true);
   $('topsWrap').classList.toggle('hidden',!tops.win.length&&!tops.los.length);
 
+  renderCobros();
+
   const cl=hv.length?clasesVivas(hv):(D.pnlPorClase||[]);
   $('claseWrap').classList.toggle('hidden',!cl.length);
   if(cl.length) $('clase').innerHTML=cl.map((c,i)=>
@@ -657,6 +669,63 @@ function render(){
       '<div class="rt"><div class="rv '+cls(c.pnlNeto)+'">'+(c.pnlNeto>0?'+':'')+fUSD0(c.pnlNeto)+'</div>'+
         '<div class="rp '+cls(c.rendNeto)+'">'+fPct(c.rendNeto)+'</div></div>'+
     '</div>').join('');
+}
+
+/* Próximos cobros de renta, solo de lo que está en cartera.
+   Los datos ya vienen de la hoja "$ ON y BONOS": cupón, fecha del próximo pago
+   y flujo por cada 100 nominales. El estimado lo calcula la API con la tenencia
+   de cada posición. */
+/* Próximos cobros: las ON con su fecha cargada en la planilla y los dividendos
+   de acciones y CEDEARs proyectados desde el historial de Yahoo.
+
+   Los de las ON son fechas ciertas. Los de los dividendos son estimados —Yahoo
+   cerró los endpoints con la fecha oficial— así que se marcan con "~" y con la
+   confianza que da la regularidad de cada empresa. */
+function renderCobros(){
+  const hoy=Date.now();
+
+  const deON=(D.rentas||[])
+    .filter(r=>r.enCartera&&r.proxPago)
+    .map(r=>({ticker:r.ticker, ms:aFechaMs(r.proxPago), fecha:r.proxPago,
+              monto:r.estimado, detalle:(r.empresa||'')+(r.cupon?' · cupón '+r.cupon:''),
+              cierto:true}));
+
+  const dp=D.dividendosProx||{};
+  const deAcciones=(D.posiciones||[]).filter(p=>dp[p.ticker]).map(p=>{
+    const d=dp[p.ticker];
+    return {ticker:p.ticker, ms:aFechaMs(d.fecha), fecha:d.fecha,
+            monto:(d.monto||0)*(p.cantidad||0),
+            detalle:'US$ '+nf(d.monto,3)+' por acción · cada '+d.cadaDias+' días',
+            cierto:false, confianza:d.confianza};
+  });
+
+  const lista=deON.concat(deAcciones).filter(r=>r.ms!=null&&r.monto)
+    .sort((a,b)=>a.ms-b.ms);
+
+  $('cobrosWrap').classList.toggle('hidden',!lista.length);
+  if(!lista.length) return;
+
+  const total=lista.reduce((a,r)=>a+(r.monto||0),0);
+  $('cobrosSub').textContent=total?fUSD0(total)+' en los próximos meses':'';
+
+  $('cobros').innerHTML=lista.map(r=>{
+    const dias=Math.round((r.ms-hoy)/86400000);
+    const meses=Math.round(dias/30);
+    const cuando=dias<0?'vencido':dias===0?'hoy':dias===1?'mañana'
+                :dias<31?'en '+dias+' días'
+                :'en '+meses+(meses===1?' mes':' meses');
+    // La confianza baja se avisa: es una proyección floja, no un dato.
+    const dudoso=!r.cierto&&r.confianza==='baja';
+    return '<div class="row" style="cursor:default">'+logo(r.ticker)+
+      '<div class="mid"><div class="tk">'+esc(r.ticker)+
+        (dias>=0&&dias<=15?'<span class="tag on">'+esc(cuando)+'</span>':'')+
+        (dudoso?'<span class="tag">irregular</span>':'')+'</div>'+
+        '<div class="mt">'+esc(r.detalle)+'</div></div>'+
+      '<div class="rt"><div class="rv">'+(r.cierto?'':'~')+fUSD(r.monto,2)+'</div>'+
+        '<div class="rp" style="color:var(--tx3)">'+(r.cierto?'':'~')+esc(r.fecha)+
+          (dias>15?' · '+esc(cuando):'')+'</div></div>'+
+    '</div>';
+  }).join('');
 }
 
 function renderDonut(){
@@ -718,12 +787,7 @@ function renderHist(){
     $('ritmo').innerHTML=
       fila('Resultado sobre lo operado',fPct(ritmo.rend),cls(ritmo.rend))+
       fila('Tiempo promedio',fDias(ritmo.dias))+
-      (ritmo.anual!==null?fila('Rendimiento anualizado',fPct(ritmo.anual),cls(ritmo.anual)):'')+
-      '<div style="font-size:11.5px;color:var(--tx3);padding-top:10px;line-height:1.45">'+
-      'Las '+ritmo.ops+' operaciones juntas, cerradas y abiertas, ponderadas por capital. '+
-      'En las que siguen abiertas el tiempo corre hasta hoy y el resultado todavía puede cambiar. '+
-      'Es solo el resultado de comprar y vender: no incluye las rentas, que sí están en el número de arriba.'+
-      '</div>';
+      (ritmo.anual!==null?fila('Rendimiento anualizado',fPct(ritmo.anual),cls(ritmo.anual)):'');
   }
 
   // Realizado por año. Depende de la fecha de venta, así que aparece solo si la
@@ -918,11 +982,8 @@ function bloqueTiempos(ticker){
   };
 
   return '<h2 style="margin-left:0">Rendimiento en el tiempo</h2>'+
-    '<div class="two">'+col('CERRADAS',c,'Realizado')+col('ABIERTAS',a,'No realizado')+'</div>'+
-    '<div style="font-size:11.5px;color:var(--tx3);margin:8px 4px 14px;line-height:1.45">'+
-    'Promedios ponderados por capital. El anualizado lleva el resultado a base anual, '+
-    'para poder comparar operaciones que duraron tiempos distintos. '+
-    'En las abiertas el tiempo corre hasta hoy y el resultado todavía puede cambiar.</div>';
+    '<div class="two" style="margin-bottom:14px">'+
+      col('CERRADAS',c,'Realizado')+col('ABIERTAS',a,'No realizado')+'</div>';
 }
 
 /* Cómo se compone el P&L que se muestra, para poder auditarlo a simple vista:
