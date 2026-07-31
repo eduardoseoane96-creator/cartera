@@ -117,6 +117,7 @@ table.ops th:first-child,table.ops td:first-child{width:23%}
 table.ops.abiertas{font-size:12px}
 table.ops.abiertas th{font-size:10.5px}
 table.ops .na{color:var(--tx3)}
+table.ops .hasta{display:block;color:var(--tx3);font-size:10px;line-height:1.3}
 table.ops tr.viva td:first-child{position:relative;padding-left:8px}
 table.ops tr.viva td:first-child::before{content:'';position:absolute;left:0;top:50%;
   transform:translateY(-50%);width:3px;height:3px;border-radius:50%;background:var(--up)}
@@ -200,6 +201,12 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
       <div class="chg" id="hSub"></div>
       <div class="grid2" id="hMinis"></div>
     </div>
+
+    <div id="anioWrap" class="hidden">
+      <h2>Realizado por año <span>solo operaciones cerradas</span></h2>
+      <div class="card" id="anios"></div>
+    </div>
+
     <div class="chips">
       <button id="fT" aria-pressed="true">Todas</button>
       <button id="fA" aria-pressed="false">Abiertas</button>
@@ -346,6 +353,58 @@ function pnlBrutoVivo(ticker){
   const pr=precioTicker(ticker);
   return ops.reduce((a,o)=>a+resultadoOp(o,pr).res,0);
 }
+
+/* ---------- métricas que dependen de la fecha de venta ----------
+   La fecha de venta se deduce en la planilla empatando cada compra con la
+   venta que la cerró. Con eso se puede medir el tiempo, que es lo que faltaba:
+   un 8% en dos meses y un 15% en tres años se veían iguales. */
+
+/** Rendimiento llevado a base anual. Sin tiempo no hay anualizado posible. */
+function anualizado(rend,dias){
+  if(!dias||dias<1||rend===null||rend===undefined) return null;
+  // Con menos de un mes el anualizado se dispara y deja de ser informativo.
+  if(dias<30) return null;
+  const r=1+rend/100;
+  if(r<=0) return null;
+  return (Math.pow(r,365/dias)-1)*100;
+}
+
+/** Resumen de las operaciones cerradas de un ticker: cuánto y en cuánto tiempo. */
+function cerradasDe(ticker){
+  const ops=opsDe(ticker).filter(o=>!o.abierta);
+  if(!ops.length) return null;
+  const conDias=ops.filter(o=>o.dias!=null&&o.costo>0);
+  if(!conDias.length) return {ops:ops.length,dias:null,anual:null};
+  // Promedios ponderados por capital: una operación de mil dólares pesa más
+  // que una de cien.
+  let capital=0, diasPond=0, resultado=0;
+  conDias.forEach(o=>{ capital+=o.costo; diasPond+=o.dias*o.costo; resultado+=o.resultado; });
+  const dias=capital?diasPond/capital:null;
+  const rend=capital?resultado/capital*100:null;
+  return {ops:ops.length, dias:dias, rend:rend, anual:anualizado(rend,dias)};
+}
+
+/** P&L realizado por año, según la fecha de venta. */
+function realizadoPorAnio(){
+  const m={};
+  (D.historico||[]).forEach(x=>{
+    opsDe(x.ticker).forEach(o=>{
+      if(o.abierta||!o.fechaVenta) return;
+      const a=String(o.fechaVenta).match(/\/(\d{2,4})$/);
+      if(!a) return;
+      let anio=parseInt(a[1],10); if(anio<100) anio+=2000;
+      if(!m[anio]) m[anio]={anio:anio,resultado:0,capital:0,ops:0};
+      m[anio].resultado+=o.resultado;
+      m[anio].capital+=o.costo;
+      m[anio].ops++;
+    });
+  });
+  return Object.keys(m).map(k=>m[k]).sort((a,b)=>b.anio-a.anio);
+}
+
+const fDias=d=>d==null?'':(d>=365?(d/365).toFixed(1).replace('.',',')+' años'
+                          :d>=30?Math.round(d/30)+(Math.round(d/30)===1?' mes':' meses')
+                          :Math.round(d)+' días');
 
 /** El histórico con las posiciones abiertas revaluadas al precio de ahora. */
 function historicoVivo(){
@@ -586,6 +645,26 @@ function renderHist(){
     '<div class="mini"><div class="lbl">Capital operado</div><div class="v">'+fUSD0(inv)+'</div></div>'+
     '<div class="mini"><div class="lbl">Rentas y dividendos</div><div class="v">'+fUSD0(rentas)+'</div></div>';
 
+  // Realizado por año. Depende de la fecha de venta, así que aparece solo si la
+  // planilla ya la tiene deducida.
+  const anios=realizadoPorAnio();
+  $('anioWrap').classList.toggle('hidden',!anios.length);
+  if(anios.length){
+    const mx=Math.max(...anios.map(a=>Math.abs(a.resultado)))||1;
+    $('anios').innerHTML=anios.map(a=>{
+      const rend=a.capital?a.resultado/a.capital*100:0;
+      return '<div class="row" style="cursor:default">'+
+        '<div class="mid"><div class="tk" style="font-size:15px">'+a.anio+'</div>'+
+          '<div class="mt">'+a.ops+(a.ops===1?' operación':' operaciones')+' · '+fUSD0(a.capital)+' operados</div>'+
+          '<div class="bar" style="margin-top:6px"><i style="width:'+
+            (Math.abs(a.resultado)/mx*100).toFixed(1)+'%;background:'+
+            (a.resultado<0?'var(--dn)':'var(--up)')+'"></i></div></div>'+
+        '<div class="rt"><div class="rv '+cls(a.resultado)+'">'+(a.resultado>0?'+':'')+fUSD(a.resultado,2)+'</div>'+
+          '<div class="rp '+cls(rend)+'">'+fPct(rend)+'</div></div>'+
+      '</div>';
+    }).join('');
+  }
+
   const f=filtroH==='abiertas'?h.filter(x=>x.abierta):filtroH==='cerradas'?h.filter(x=>!x.abierta):h;
   const ord=f.slice().sort((a,b)=>b.pnlNeto-a.pnlNeto);
   $('histList').innerHTML=ord.length?ord.map((x,i)=>
@@ -726,7 +805,8 @@ function tablaOperaciones(ticker,soloAbiertas){
     ops.map(o=>{
       const v=vivoDe(o);
       return '<tr'+(o.abierta&&!soloAbiertas?' class="viva"':'')+'>'+
-      '<td>'+esc(fFecha(o.fecha))+'</td>'+
+      '<td>'+esc(fFecha(o.fecha))+
+        (o.fechaVenta?'<span class="hasta">→ '+esc(fFecha(o.fechaVenta))+'</span>':'')+'</td>'+
       '<td>'+fCant(o.cantidad)+'</td>'+
       '<td>'+nf(o.precioCompra,2)+'</td>'+
       (soloAbiertas?'':'<td>'+(o.abierta?'<span class="na">—</span>':nf(o.precioVenta,2))+'</td>')+
@@ -736,6 +816,23 @@ function tablaOperaciones(ticker,soloAbiertas){
     '</tbody></table>'+
     '<div style="font-size:11px;color:var(--tx3);padding-top:9px;line-height:1.45">'+
     pie+'</div></div>';
+}
+
+/* Lo que se puede medir recién ahora que hay fecha de venta: cuánto tiempo
+   estuvo el capital invertido y a qué ritmo rindió. */
+function bloqueCerradas(ticker){
+  const c=cerradasDe(ticker);
+  if(!c||c.dias==null) return '';
+  return '<h2 style="margin-left:0">Operaciones cerradas <span>'+c.ops+
+      (c.ops===1?' operación':' operaciones')+'</span></h2>'+
+    '<div class="card" style="padding:14px 16px">'+
+      fila('Resultado realizado',fPct(c.rend),cls(c.rend))+
+      fila('Tiempo promedio',fDias(c.dias))+
+      (c.anual!==null?fila('Rendimiento anualizado',fPct(c.anual),cls(c.anual)):'')+
+      '<div style="font-size:11.5px;color:var(--tx3);padding-top:10px;line-height:1.45">'+
+      'Promedios ponderados por capital. El anualizado lleva el resultado a base '+
+      'anual: sirve para comparar operaciones que duraron tiempos distintos.</div>'+
+    '</div>';
 }
 
 /* Cómo se compone el P&L que se muestra, para poder auditarlo a simple vista:
@@ -784,6 +881,7 @@ function detalleHist(x){
       fila('Rentas y dividendos',fUSD(x.rentas))+
       fila('Operaciones',String(x.operaciones))+
     '</div>'+
+    bloqueCerradas(x.ticker)+
     origenDelPnl(x,p)+
     (p?'<h2 style="margin-left:0">Posición actual</h2><div class="card" style="padding:14px 16px">'+
       fila('Tenencia',fCant(p.cantidad))+
