@@ -202,10 +202,9 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
       <div class="grid2" id="hMinis"></div>
     </div>
 
-    <div id="sesgoWrap" class="hidden">
-      <h2>Lo cerrado y lo que sigue abierto</h2>
-      <div class="two" id="sesgo"></div>
-      <div id="sesgoNota" style="font-size:11.5px;color:var(--tx3);margin:8px 4px 14px;line-height:1.45"></div>
+    <div id="ritmoWrap" class="hidden">
+      <h2>Rendimiento en el tiempo <span>todas las operaciones</span></h2>
+      <div class="card" id="ritmo" style="padding:14px 16px"></div>
     </div>
 
     <div id="anioWrap" class="hidden">
@@ -689,48 +688,42 @@ function renderHist(){
     '<div class="mini"><div class="lbl">Capital operado</div><div class="v">'+fUSD0(inv)+'</div></div>'+
     '<div class="mini"><div class="lbl">Rentas y dividendos</div><div class="v">'+fUSD0(rentas)+'</div></div>';
 
-  /* Cerradas contra abiertas, sobre toda la cartera. Es el número que corrige
-     la lectura optimista de mirar solo lo realizado: si se cierran las
-     ganadoras y se sostienen las perdedoras, acá se ve. */
-  const glob=(abiertas)=>{
+  /* Un solo rendimiento para toda la cartera, cerradas y abiertas juntas.
+     Cada operación aporta su capital, su resultado y sus días, ponderado por
+     capital. Las cerradas aportan lo realizado con su tiempo terminado; las
+     abiertas, lo no realizado con el tiempo que llevan hasta hoy.
+
+     Juntarlas no es un detalle de presentación: mirar solo lo cerrado da una
+     lectura favorecida, porque lo que se cierra suele ser lo que ganó. Así el
+     número no se puede elegir. */
+  const ritmo=(()=>{
     let capital=0, diasPond=0, conDias=0, resultado=0, cuenta=0;
     (D.historico||[]).forEach(x=>{
-      const pr=abiertas?precioTicker(x.ticker):0;
+      const pr=precioTicker(x.ticker);
       opsDe(x.ticker).forEach(o=>{
-        if(!!o.abierta!==!!abiertas||!o.costo) return;
-        const dias=abiertas?diasAbierta(o):o.dias;
-        resultado+=abiertas?resultadoOp(o,pr).res:o.resultado;
+        if(!o.costo) return;
+        const dias=o.abierta?diasAbierta(o):o.dias;
+        resultado+=resultadoOp(o,pr).res;
         capital+=o.costo; cuenta++;
         if(dias!=null){ diasPond+=dias*o.costo; conDias+=o.costo; }
       });
     });
-    if(!capital) return null;
-    const dias=conDias?diasPond/conDias:null, rend=resultado/capital*100;
+    if(!capital||!conDias) return null;
+    const dias=diasPond/conDias, rend=resultado/capital*100;
     return {ops:cuenta,capital,resultado,dias,rend,anual:anualizado(rend,dias)};
-  };
-  const gC=glob(false), gA=glob(true);
-  $('sesgoWrap').classList.toggle('hidden',!(gC&&gA&&gC.dias!=null));
-  if(gC&&gA&&gC.dias!=null){
-    const tarjeta=(t,r,et)=>!r?'':'<div class="tcard"><h3>'+t+'</h3>'+
-      '<div class="tline"><span>'+et+'</span><b class="'+cls(r.resultado)+'">'+
-        (r.resultado>0?'+':'')+fUSD0(r.resultado)+'</b></div>'+
-      '<div class="tline"><span>Rendimiento</span><b class="'+cls(r.rend)+'">'+fPct(r.rend)+'</b></div>'+
-      '<div class="tline"><span>Capital</span><b>'+fUSD0(r.capital)+'</b></div>'+
-      '<div class="tline"><span>Tiempo</span><b>'+fDias(r.dias)+'</b></div>'+
-      (r.anual!==null?'<div class="tline"><span>Anualizado</span><b class="'+cls(r.anual)+'">'+
-        fPct(r.anual)+'</b></div>':'')+
-      '<div class="tline"><span>Operaciones</span><b>'+r.ops+'</b></div></div>';
-    $('sesgo').innerHTML=tarjeta('CERRADAS',gC,'Realizado')+tarjeta('ABIERTAS',gA,'No realizado');
+  })();
 
-    const brecha=gC.rend-gA.rend;
-    $('sesgoNota').innerHTML=
-      (Math.abs(brecha)>=5
-        ? 'Lo cerrado rinde '+nf(Math.abs(brecha),1)+' puntos '+(brecha>0?'más':'menos')+
-          ' que lo que seguís teniendo. '+(brecha>0
-            ? 'Es lo habitual cuando se cierran las ganadoras y se sostienen las perdedoras esperando que recuperen: mirar solo lo realizado da una imagen mejor que la de la cartera real.'
-            : 'Las posiciones abiertas vienen rindiendo mejor que lo que ya cerraste.')
-        : 'Lo cerrado y lo abierto rinden parecido.')+
-      ' Promedios ponderados por capital; en las abiertas el tiempo corre hasta hoy.';
+  $('ritmoWrap').classList.toggle('hidden',!ritmo);
+  if(ritmo){
+    $('ritmo').innerHTML=
+      fila('Resultado sobre lo operado',fPct(ritmo.rend),cls(ritmo.rend))+
+      fila('Tiempo promedio',fDias(ritmo.dias))+
+      (ritmo.anual!==null?fila('Rendimiento anualizado',fPct(ritmo.anual),cls(ritmo.anual)):'')+
+      '<div style="font-size:11.5px;color:var(--tx3);padding-top:10px;line-height:1.45">'+
+      'Las '+ritmo.ops+' operaciones juntas, cerradas y abiertas, ponderadas por capital. '+
+      'En las que siguen abiertas el tiempo corre hasta hoy y el resultado todavía puede cambiar. '+
+      'Es solo el resultado de comprar y vender: no incluye las rentas, que sí están en el número de arriba.'+
+      '</div>';
   }
 
   // Realizado por año. Depende de la fecha de venta, así que aparece solo si la
