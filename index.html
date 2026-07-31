@@ -687,7 +687,9 @@ function renderCobros(){
   const deON=(D.rentas||[])
     .filter(r=>r.enCartera&&r.proxPago)
     .map(r=>({ticker:r.ticker, ms:aFechaMs(r.proxPago), fecha:r.proxPago,
-              monto:r.estimado, detalle:(r.empresa||'')+(r.cupon?' · cupón '+r.cupon:''),
+              monto:r.estimado,
+              detalle:[r.empresa,r.cupon?'cupón '+r.cupon:'',
+                       (r.frecuencia||'').toLowerCase()].filter(Boolean).join(' · '),
               cierto:true}));
 
   const dp=D.dividendosProx||{};
@@ -699,7 +701,9 @@ function renderCobros(){
             cierto:false, confianza:d.confianza};
   });
 
-  const lista=deON.concat(deAcciones).filter(r=>r.ms!=null&&r.monto)
+  // Alcanza con tener la fecha. Si no se pudo estimar el monto se muestra igual,
+  // porque saber cuándo cobrás ya sirve.
+  const lista=deON.concat(deAcciones).filter(r=>r.ms!=null)
     .sort((a,b)=>a.ms-b.ms);
 
   $('cobrosWrap').classList.toggle('hidden',!lista.length);
@@ -721,7 +725,7 @@ function renderCobros(){
         (dias>=0&&dias<=15?'<span class="tag on">'+esc(cuando)+'</span>':'')+
         (dudoso?'<span class="tag">irregular</span>':'')+'</div>'+
         '<div class="mt">'+esc(r.detalle)+'</div></div>'+
-      '<div class="rt"><div class="rv">'+(r.cierto?'':'~')+fUSD(r.monto,2)+'</div>'+
+      '<div class="rt"><div class="rv">'+(r.monto?(r.cierto?'':'~')+fUSD(r.monto,2):'—')+'</div>'+
         '<div class="rp" style="color:var(--tx3)">'+(r.cierto?'':'~')+esc(r.fecha)+
           (dias>15?' · '+esc(cuando):'')+'</div></div>'+
     '</div>';
