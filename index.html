@@ -132,6 +132,21 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
   font:600 15px/1 inherit;margin-top:14px;cursor:pointer}
 .btn.alt{background:var(--card2);color:var(--tx);border:.5px solid var(--line)}
 .err{background:rgba(192,57,43,.12);color:var(--dn);padding:12px;border-radius:10px;font-size:13.5px;margin-bottom:12px}
+/* Serie histórica: línea marcada con el área difusa debajo, sin ejes.
+   El foco está en la forma de la curva, no en los valores exactos. */
+.serie{margin-top:14px}
+.scv{position:relative;height:96px;width:100%}
+.scv canvas{display:block;width:100%!important;height:96px!important}
+.rangos{display:flex;gap:4px;margin-top:8px}
+.rangos button{flex:1;border:0;background:transparent;color:var(--tx3);
+  font:500 11px/1 inherit;padding:6px 0;border-radius:7px;cursor:pointer}
+.rangos button[aria-pressed=true]{background:var(--card2);color:var(--tx)}
+.rangos button:disabled{opacity:.3}
+.swap{border:.5px solid var(--line);background:var(--card2);color:var(--tx2);
+  font:500 12px/1 inherit;padding:3px 7px;border-radius:7px;margin-left:7px;cursor:pointer;
+  vertical-align:middle}
+.serieVacia{font-size:11.5px;color:var(--tx3);padding:26px 0;text-align:center;line-height:1.5}
+
 .chips{display:flex;gap:7px;margin-bottom:12px}
 .chips button{flex:1;border:.5px solid var(--line);background:var(--card);color:var(--tx2);
   font:500 12.5px/1 inherit;padding:9px 0;border-radius:9px;cursor:pointer}
@@ -160,9 +175,16 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
 
   <div id="vistaCartera">
     <div class="card">
-      <div class="lbl" id="heroLbl">Valor de la cartera</div>
+      <!-- El botón va afuera del span del título: render() reescribe ese texto
+           con textContent y se llevaría puesto cualquier hijo. -->
+      <div class="lbl"><span id="heroLbl">Valor de la cartera</span><button id="swap"
+        class="swap hidden" aria-label="Cambiar métrica">⇄</button></div>
       <div class="big" id="heroVal">—</div>
       <div class="chg" id="heroChg"></div>
+      <div class="serie hidden" id="serieWrap">
+        <div class="scv"><canvas id="serie"></canvas></div>
+        <div class="rangos" id="rangos"></div>
+      </div>
       <div class="grid2" id="minis"></div>
     </div>
 
@@ -209,6 +231,10 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
       <div class="lbl">P&amp;L neto acumulado</div>
       <div class="big" id="hTot">—</div>
       <div class="chg" id="hSub"></div>
+      <div class="serie hidden" id="serieHWrap">
+        <div class="scv"><canvas id="serieH"></canvas></div>
+        <div class="rangos" id="rangosH"></div>
+      </div>
       <div class="grid2" id="hMinis"></div>
     </div>
 
@@ -516,13 +542,17 @@ function totales(){
     // tarjeta de abajo. "dif" ajusta por la diferencia entre el valor que
     // tiene la planilla y el que traen los precios en vivo.
     const dif=totalPosiciones()-t.subtotalValor;
+    const activos=(t.totalCartera||0)+dif, neto=(t.patrimonioNeto||0)+dif;
     // El P&L sale de la misma suma que usa el Histórico. Antes partía del total
     // del Dashboard, que viene redondeado a 2 decimales de una sola vez,
     // mientras el Histórico suma 154 renglones redondeados de a uno: los dos
     // números diferían por centavos sin ninguna razón de fondo.
-    return { titulo:'Activos totales', valor:(t.totalCartera||0)+dif,
-      pnl:pnlNetoAcumulado(), pct:null,
-      minis:[['Patrimonio neto',fUSD0((t.patrimonioNeto||0)+dif)],['Deudas',fUSD0(t.deudas)]] };
+    // Cuál va arriba lo decide el botón: el gráfico sigue al que esté en grande.
+    return metricaP==='patrimonio'
+      ? { titulo:'Patrimonio neto', valor:neto, pnl:pnlNetoAcumulado(), pct:null,
+          minis:[['Activos totales',fUSD0(activos)],['Deudas',fUSD0(t.deudas)]] }
+      : { titulo:'Activos totales', valor:activos, pnl:pnlNetoAcumulado(), pct:null,
+          minis:[['Patrimonio neto',fUSD0(neto)],['Deudas',fUSD0(t.deudas)]] };
   }
   // Cartera: solo lo invertido a valor de hoy. El efectivo no se suma acá,
   // queda para Patrimonio; sigue visible en la tarjeta "Disponible".
@@ -613,7 +643,7 @@ function render(){
 
   $('vistaCartera').classList.toggle('hidden',vista==='historico');
   $('vistaHist').classList.toggle('hidden',vista!=='historico');
-  if(vista==='historico'){ renderHist(); return; }
+  if(vista==='historico'){ renderHist(); renderSerie(); return; }
 
   const T=totales();
   $('heroLbl').textContent=T.titulo;
@@ -622,6 +652,11 @@ function render(){
     (T.pct===null?'':'<span class="pill '+cls(T.pct)+'">'+fPct(T.pct)+'</span>');
   $('minis').innerHTML=T.minis.map(m=>
     '<div class="mini"><div class="lbl">'+m[0]+'</div><div class="v">'+m[1]+'</div></div>').join('');
+
+  // La serie solo tiene sentido en Patrimonio: es la evolución del patrimonio,
+  // no la del valor de la cartera del día.
+  if(vista==='patrimonio') renderSerie();
+  else { $('serieWrap').classList.add('hidden'); $('swap').classList.add('hidden'); }
 
   renderDonut();
 
@@ -730,6 +765,118 @@ function renderCobros(){
           (dias>15?' · '+esc(cuando):'')+'</div></div>'+
     '</div>';
   }).join('');
+}
+
+/* ---------- serie histórica ----------
+   Los puntos salen de la hoja `Historial patrimonio`, que suma una fila cada vez
+   que se corre Actualizar todo en la planilla. La densidad de la serie es la
+   frecuencia con que se corre: por eso los rangos cortos se desactivan solos
+   cuando no tienen suficientes puntos para dibujar algo. */
+
+const RANGOS=[['D',1],['W',7],['M',30],['YTD',null],['1A',365],['TODO',0]];
+let rangoP='TODO', rangoH='TODO', metricaP='activos';
+let chartSerie=null, chartSerieH=null;
+
+/* Desde cuándo abarca un rango. Se cuenta desde la medianoche de hoy: los
+   registros se guardan sin hora, así que comparar contra la hora actual dejaba
+   afuera el punto justo del límite. */
+function desdeDelRango(k,dias){
+  const d=new Date(); d.setHours(0,0,0,0);
+  if(k==='YTD') return new Date(d.getFullYear(),0,1).getTime();
+  return d.getTime()-(dias-1)*86400000;
+}
+
+function serieFiltrada(clave){
+  const s=(D.serie||[]).map(p=>({ms:aFechaMs(p.fecha),v:p[metricaSegun(clave)]}))
+    .filter(p=>p.ms!=null&&p.v!=null).sort((a,b)=>a.ms-b.ms);
+  if(!s.length) return [];
+  const r=clave==='hist'?rangoH:rangoP;
+  if(r==='TODO') return s;
+  const desde=desdeDelRango(r,(RANGOS.find(x=>x[0]===r)||[,0])[1]);
+  const f=s.filter(p=>p.ms>=desde);
+  // Con un solo punto no hay línea que dibujar: se agrega el anterior como
+  // referencia para que se vea de dónde viene.
+  if(f.length<2){
+    const previos=s.filter(p=>p.ms<desde);
+    if(previos.length) return [previos[previos.length-1]].concat(f);
+  }
+  return f;
+}
+
+const metricaSegun=clave=>clave==='hist'?'pnl':metricaP;
+
+function dibujarSerie(canvas,datos,ref){
+  const ctx=canvas.getContext('2d');
+  if(ref&&ref.chart) ref.chart.destroy();
+  if(datos.length<2) return null;
+
+  const sube=datos[datos.length-1].v>=datos[0].v;
+  const color=sube?getComputedStyle(document.documentElement).getPropertyValue('--up').trim()
+                  :getComputedStyle(document.documentElement).getPropertyValue('--dn').trim();
+
+  // El área se desvanece hacia abajo: el borde queda marcado y el cuerpo suave.
+  const alto=canvas.height||96;
+  const grad=ctx.createLinearGradient(0,0,0,alto);
+  grad.addColorStop(0,color+'55');
+  grad.addColorStop(1,color+'00');
+
+  return new Chart(canvas,{
+    type:'line',
+    data:{labels:datos.map(p=>p.ms),
+      datasets:[{data:datos.map(p=>p.v),borderColor:color,backgroundColor:grad,
+        borderWidth:2,fill:true,tension:.3,pointRadius:0,pointHoverRadius:0}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      animation:{duration:300},
+      plugins:{legend:{display:false},tooltip:{enabled:false}},
+      scales:{x:{display:false},y:{display:false,
+        // Un poco de aire arriba y abajo para que la curva no toque los bordes.
+        grace:'8%'}},
+      elements:{line:{borderJoinStyle:'round'}}}
+  });
+}
+
+function renderSerie(){
+  const hay=(D.serie||[]).length;
+  const enHist=vista==='historico';
+  const wrap=$(enHist?'serieHWrap':'serieWrap');
+  wrap.classList.toggle('hidden',!hay);
+  $('swap').classList.toggle('hidden',!(hay&&vista==='patrimonio'));
+  if(!hay) return;
+
+  const datos=serieFiltrada(enHist?'hist':'pat');
+  const cont=$(enHist?'rangosH':'rangos');
+  const actual=enHist?rangoH:rangoP;
+
+  /* Un rango se habilita si tiene al menos un registro propio dentro del
+     período. Se mira eso y no la cantidad de puntos dibujados, porque cuando
+     falta uno se agrega el anterior como referencia: sin este control, "D"
+     figuraría disponible mostrando en realidad el salto del último mes. */
+  const todos=(D.serie||[]).map(p=>aFechaMs(p.fecha)).filter(m=>m!=null);
+  cont.innerHTML=RANGOS.map(([k,dias])=>{
+    const n=k==='TODO'?todos.length
+           :todos.filter(m=>m>=desdeDelRango(k,dias)).length;
+    return '<button data-r="'+k+'" aria-pressed="'+(k===actual)+'"'+
+      (n<1?' disabled':'')+'>'+k+'</button>';
+  }).join('');
+  [...cont.children].forEach(b=>b.onclick=()=>{
+    if(enHist) rangoH=b.dataset.r; else rangoP=b.dataset.r;
+    renderSerie();
+  });
+
+  const cv=$(enHist?'serieH':'serie');
+  const ref=enHist?{chart:chartSerieH}:{chart:chartSerie};
+  const c=dibujarSerie(cv,datos,ref);
+  if(enHist) chartSerieH=c; else chartSerie=c;
+
+  cv.parentNode.classList.toggle('hidden',datos.length<2);
+  let vacio=cv.parentNode.parentNode.querySelector('.serieVacia');
+  if(datos.length<2){
+    if(!vacio){ vacio=document.createElement('div'); vacio.className='serieVacia';
+      cv.parentNode.parentNode.insertBefore(vacio,cv.parentNode); }
+    vacio.textContent=hay===1
+      ? 'Un solo registro hasta ahora. La curva aparece cuando haya al menos dos.'
+      : 'No hay registros en este período.';
+  } else if(vacio) vacio.remove();
 }
 
 function renderDonut(){
@@ -1105,6 +1252,12 @@ function cambiar(v){
   $('tabH').setAttribute('aria-selected',v==='historico');
   if(D) render();
 }
+// Intercambia cuál de las dos métricas va en grande. El gráfico la sigue.
+$('swap').onclick=()=>{
+  metricaP=metricaP==='activos'?'patrimonio':'activos';
+  render();
+};
+
 [['oV','valor'],['oA','pnl'],['oR','rend']].forEach(([id,val])=>{
   $(id).onclick=()=>{
     ordenPos=val;
