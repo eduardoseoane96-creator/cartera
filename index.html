@@ -135,8 +135,8 @@ input{width:100%;padding:12px;border-radius:10px;border:.5px solid var(--line);
 /* Serie histórica: línea marcada con el área difusa debajo, sin ejes.
    El foco está en la forma de la curva, no en los valores exactos. */
 .serie{margin-top:14px}
-.scv{position:relative;height:96px;width:100%}
-.scv canvas{display:block;width:100%!important;height:96px!important}
+.scv{position:relative;height:132px;width:100%}
+.scv canvas{display:block;width:100%!important;height:132px!important}
 .rangos{display:flex;gap:4px;margin-top:8px}
 .rangos button{flex:1;border:0;background:transparent;color:var(--tx3);
   font:500 11px/1 inherit;padding:6px 0;border-radius:7px;cursor:pointer}
@@ -773,8 +773,8 @@ function renderCobros(){
    frecuencia con que se corre: por eso los rangos cortos se desactivan solos
    cuando no tienen suficientes puntos para dibujar algo. */
 
-const RANGOS=[['D',1],['W',7],['M',30],['YTD',null],['1A',365],['TODO',0]];
-let rangoP='TODO', rangoH='TODO', metricaP='activos';
+const RANGOS=[['D',1],['W',7],['M',30],['YTD',null],['1Y',365],['ALL',0]];
+let rangoP='ALL', rangoH='ALL', metricaP='activos';
 let chartSerie=null, chartSerieH=null;
 
 /* Desde cuándo abarca un rango. Se cuenta desde la medianoche de hoy: los
@@ -791,7 +791,7 @@ function serieFiltrada(clave){
     .filter(p=>p.ms!=null&&p.v!=null).sort((a,b)=>a.ms-b.ms);
   if(!s.length) return [];
   const r=clave==='hist'?rangoH:rangoP;
-  if(r==='TODO') return s;
+  if(r==='ALL') return s;
   const desde=desdeDelRango(r,(RANGOS.find(x=>x[0]===r)||[,0])[1]);
   const f=s.filter(p=>p.ms>=desde);
   // Con un solo punto no hay línea que dibujar: se agrega el anterior como
@@ -805,32 +805,83 @@ function serieFiltrada(clave){
 
 const metricaSegun=clave=>clave==='hist'?'pnl':metricaP;
 
-function dibujarSerie(canvas,datos,ref){
+const MESES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+
+/* Cómo se rotula el eje del tiempo. Cambia con el rango: no tiene sentido
+   mostrar el año cuando se está mirando una semana, ni el día cuando se están
+   mirando tres años. */
+function etiquetaEje(ms,rango){
+  const d=new Date(ms);
+  const p=n=>String(n).padStart(2,'0');
+  if(rango==='D')  return p(d.getHours())+':'+p(d.getMinutes());
+  if(rango==='W')  return ['dom','lun','mar','mié','jue','vie','sáb'][d.getDay()];
+  if(rango==='M')  return p(d.getDate())+'/'+p(d.getMonth()+1);
+  if(rango==='YTD'||rango==='1Y') return MESES[d.getMonth()];
+  return MESES[d.getMonth()]+' '+String(d.getFullYear()).slice(2);
+}
+
+/** Fecha completa, para el detalle al tocar un punto. */
+function fechaLarga(ms){
+  const d=new Date(ms), p=n=>String(n).padStart(2,'0');
+  return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear();
+}
+
+/** Valores del eje: abreviados, que en 40px de ancho no entra "60.369,54". */
+const fEje=v=>{
+  const a=Math.abs(v);
+  if(a>=1000000) return (v<0?'−':'')+nf(a/1000000,1)+'M';
+  if(a>=1000)    return (v<0?'−':'')+nf(a/1000,a>=10000?0:1)+'k';
+  return (v<0?'−':'')+nf(a,0);
+};
+
+function dibujarSerie(canvas,datos,ref,rango){
   const ctx=canvas.getContext('2d');
   if(ref&&ref.chart) ref.chart.destroy();
   if(datos.length<2) return null;
 
+  // El eje horario solo sirve si los registros tienen hora. Como se guarda uno
+  // por día, en el rango del día saldrían todos "00:00": ahí se usa la fecha.
+  if(rango==='D'&&datos.every(p=>new Date(p.ms).getHours()===0)) rango='M';
+
+  const css=getComputedStyle(document.documentElement);
   const sube=datos[datos.length-1].v>=datos[0].v;
-  const color=sube?getComputedStyle(document.documentElement).getPropertyValue('--up').trim()
-                  :getComputedStyle(document.documentElement).getPropertyValue('--dn').trim();
+  const color=(sube?css.getPropertyValue('--up'):css.getPropertyValue('--dn')).trim();
+  const tenue=css.getPropertyValue('--tx3').trim();
+  const linea=css.getPropertyValue('--line').trim();
 
   // El área se desvanece hacia abajo: el borde queda marcado y el cuerpo suave.
-  const alto=canvas.height||96;
+  const alto=canvas.height||130;
   const grad=ctx.createLinearGradient(0,0,0,alto);
   grad.addColorStop(0,color+'55');
   grad.addColorStop(1,color+'00');
 
   return new Chart(canvas,{
     type:'line',
-    data:{labels:datos.map(p=>p.ms),
+    data:{labels:datos.map(p=>etiquetaEje(p.ms,rango)),
       datasets:[{data:datos.map(p=>p.v),borderColor:color,backgroundColor:grad,
-        borderWidth:2,fill:true,tension:.3,pointRadius:0,pointHoverRadius:0}]},
+        borderWidth:2,fill:true,tension:.3,
+        pointRadius:0,pointHoverRadius:4,pointHoverBackgroundColor:color,
+        pointHoverBorderColor:'#fff',pointHoverBorderWidth:2}]},
     options:{responsive:true,maintainAspectRatio:false,
       animation:{duration:300},
-      plugins:{legend:{display:false},tooltip:{enabled:false}},
-      scales:{x:{display:false},y:{display:false,
-        // Un poco de aire arriba y abajo para que la curva no toque los bordes.
-        grace:'8%'}},
+      // Al tocar en cualquier lado agarra el punto más cercano en horizontal,
+      // sin necesidad de acertarle justo.
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:false},
+        tooltip:{enabled:true,displayColors:false,
+          backgroundColor:'rgba(20,20,22,.92)',padding:9,cornerRadius:8,
+          titleFont:{size:11,weight:'500'},bodyFont:{size:13,weight:'600'},
+          callbacks:{
+            title:it=>fechaLarga(datos[it[0].dataIndex].ms),
+            label:it=>fUSD(it.parsed.y,2)}}},
+      scales:{
+        x:{display:true,grid:{display:false},border:{color:linea},
+           ticks:{color:tenue,font:{size:9.5},maxRotation:0,autoSkipPadding:14,
+                  maxTicksLimit:6}},
+        y:{display:true,position:'right',grace:'8%',
+           grid:{color:linea,drawTicks:false},border:{display:false},
+           ticks:{color:tenue,font:{size:9.5},maxTicksLimit:4,padding:6,
+                  callback:v=>fEje(v)}}},
       elements:{line:{borderJoinStyle:'round'}}}
   });
 }
@@ -853,7 +904,7 @@ function renderSerie(){
      figuraría disponible mostrando en realidad el salto del último mes. */
   const todos=(D.serie||[]).map(p=>aFechaMs(p.fecha)).filter(m=>m!=null);
   cont.innerHTML=RANGOS.map(([k,dias])=>{
-    const n=k==='TODO'?todos.length
+    const n=k==='ALL'?todos.length
            :todos.filter(m=>m>=desdeDelRango(k,dias)).length;
     return '<button data-r="'+k+'" aria-pressed="'+(k===actual)+'"'+
       (n<1?' disabled':'')+'>'+k+'</button>';
@@ -865,7 +916,7 @@ function renderSerie(){
 
   const cv=$(enHist?'serieH':'serie');
   const ref=enHist?{chart:chartSerieH}:{chart:chartSerie};
-  const c=dibujarSerie(cv,datos,ref);
+  const c=dibujarSerie(cv,datos,ref,actual);
   if(enHist) chartSerieH=c; else chartSerie=c;
 
   cv.parentNode.classList.toggle('hidden',datos.length<2);
