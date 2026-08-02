@@ -773,7 +773,10 @@ function renderCobros(){
    frecuencia con que se corre: por eso los rangos cortos se desactivan solos
    cuando no tienen suficientes puntos para dibujar algo. */
 
-const RANGOS=[['D',1],['W',7],['M',30],['YTD',null],['1Y',365],['ALL',0]];
+/* Sin D ni W: los registros se guardan uno por día y sin hora, así que un rango
+   de un día no tiene nada que mostrar y el de una semana, apenas un par de
+   puntos. Desde un mes para arriba la curva se lee. */
+const RANGOS=[['M',30],['YTD',null],['1Y',365],['ALL',0]];
 let rangoP='ALL', rangoH='ALL', metricaP='activos';
 let chartSerie=null, chartSerieH=null;
 
@@ -813,8 +816,6 @@ const MESES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','
 function etiquetaEje(ms,rango){
   const d=new Date(ms);
   const p=n=>String(n).padStart(2,'0');
-  if(rango==='D')  return p(d.getHours())+':'+p(d.getMinutes());
-  if(rango==='W')  return ['dom','lun','mar','mié','jue','vie','sáb'][d.getDay()];
   if(rango==='M')  return p(d.getDate())+'/'+p(d.getMonth()+1);
   if(rango==='YTD'||rango==='1Y') return MESES[d.getMonth()];
   return MESES[d.getMonth()]+' '+String(d.getFullYear()).slice(2);
@@ -839,9 +840,6 @@ function dibujarSerie(canvas,datos,ref,rango){
   if(ref&&ref.chart) ref.chart.destroy();
   if(datos.length<2) return null;
 
-  // El eje horario solo sirve si los registros tienen hora. Como se guarda uno
-  // por día, en el rango del día saldrían todos "00:00": ahí se usa la fecha.
-  if(rango==='D'&&datos.every(p=>new Date(p.ms).getHours()===0)) rango='M';
 
   const css=getComputedStyle(document.documentElement);
   const sube=datos[datos.length-1].v>=datos[0].v;
